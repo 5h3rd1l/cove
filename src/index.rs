@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use fs4::fs_std::FileExt;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{AllQuery, TermQuery};
@@ -27,6 +28,22 @@ pub const INDEX_REFRESH_BATCH_SIZE: usize = 500;
 /// How often a streaming refresh commits, so TUI results update while long
 /// refreshes run without paying a commit (fsync plus a new segment) per batch.
 const STREAMING_COMMIT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Text relevance remains the primary signal, while recent sessions receive a
+/// bounded boost that halves every two weeks. The multiplier starts at 2.5 for
+/// current sessions and approaches 1.0 as sessions age.
+const RECENCY_HALF_LIFE_SECONDS: f64 = 14.0 * 24.0 * 60.0 * 60.0;
+const RECENCY_BOOST_WEIGHT: f64 = 1.5;
+
+fn recency_adjusted_score(text_score: Score, timestamp: f64, now: f64) -> Score {
+    if !timestamp.is_finite() || !now.is_finite() {
+        return text_score;
+    }
+
+    let age_seconds = (now - timestamp).max(0.0);
+    let freshness = 2.0_f64.powf(-age_seconds / RECENCY_HALF_LIFE_SECONDS);
+    (f64::from(text_score) * (1.0 + RECENCY_BOOST_WEIGHT * freshness)) as Score
+}
 
 struct IndexLock {
     _file: File,
@@ -324,12 +341,21 @@ impl SessionIndex {
                     .map(|(score, addr)| (score.unwrap_or_default() as f32, addr)),
             )
         } else {
-            let hits: Vec<(Score, DocAddress)> = searcher.search(
-                &query,
-                &TopDocs::with_limit(limit)
+            let now = Utc::now().timestamp_millis() as f64 / 1_000.0;
+            let collector =
+                TopDocs::with_limit(limit)
                     .and_offset(offset)
-                    .order_by_score(),
-            )?;
+                    .tweak_score(move |segment_reader| {
+                        let timestamps = segment_reader.fast_fields().f64("timestamp").ok();
+                        move |doc, text_score| {
+                            let timestamp = timestamps
+                                .as_ref()
+                                .and_then(|values| values.first(doc))
+                                .unwrap_or_default();
+                            recency_adjusted_score(text_score, timestamp, now)
+                        }
+                    });
+            let hits: Vec<(Score, DocAddress)> = searcher.search(&query, &collector)?;
             self.hits_to_sessions(&searcher, hits.into_iter())
         }
     }
@@ -536,15 +562,134 @@ impl IndexUpdater<'_> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, Local, Timelike};
+    use chrono::{Datelike, Duration as ChronoDuration, Local, Timelike};
     use tempfile::tempdir;
 
     use super::*;
 
     fn session(id: &str, agent: &str, title: &str, dir: &str, content: &str) -> Session {
-        let mut session = Session::new(id, agent, title, dir, Local::now(), content, 2);
+        session_at(id, agent, title, dir, content, ChronoDuration::zero())
+    }
+
+    fn session_at(
+        id: &str,
+        agent: &str,
+        title: &str,
+        dir: &str,
+        content: &str,
+        age: ChronoDuration,
+    ) -> Session {
+        let mut session = Session::new(id, agent, title, dir, Local::now() - age, content, 2);
         session.mtime = 1.0;
         session
+    }
+
+    #[test]
+    fn recency_score_decays_smoothly_toward_text_score() {
+        let now = 2_000_000_000.0;
+        let text_score = 10.0;
+        let current = recency_adjusted_score(text_score, now, now);
+        let after_half_life =
+            recency_adjusted_score(text_score, now - RECENCY_HALF_LIFE_SECONDS, now);
+        let after_ninety_days = recency_adjusted_score(text_score, now - 90.0 * 86_400.0, now);
+
+        assert!((current - 25.0).abs() < 0.001);
+        assert!((after_half_life - 17.5).abs() < 0.001);
+        assert!(after_ninety_days > text_score);
+        assert!(after_ninety_days < 10.2);
+    }
+
+    #[test]
+    fn equally_relevant_text_results_rank_recent_session_first() {
+        let temp = tempdir().unwrap();
+        let index = SessionIndex::open(temp.path().join("index")).unwrap();
+        index
+            .update_sessions(&[
+                session_at(
+                    "old",
+                    "claude",
+                    "Deployment investigation",
+                    "/work/api",
+                    "shared searchable phrase",
+                    ChronoDuration::days(90),
+                ),
+                session_at(
+                    "recent",
+                    "claude",
+                    "Deployment investigation",
+                    "/work/api",
+                    "shared searchable phrase",
+                    ChronoDuration::hours(1),
+                ),
+            ])
+            .unwrap();
+
+        let results = index
+            .search("shared searchable phrase", None, None, 10)
+            .unwrap();
+
+        assert_eq!(results[0].session.id, "recent");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn recent_match_can_outweigh_old_term_frequency() {
+        let temp = tempdir().unwrap();
+        let index = SessionIndex::open(temp.path().join("index")).unwrap();
+        index
+            .update_sessions(&[
+                session_at(
+                    "old-repeated",
+                    "claude",
+                    "Investigation",
+                    "/work/api",
+                    "ranking ranking ranking",
+                    ChronoDuration::days(90),
+                ),
+                session_at(
+                    "recent",
+                    "claude",
+                    "Investigation",
+                    "/work/api",
+                    "ranking",
+                    ChronoDuration::hours(1),
+                ),
+            ])
+            .unwrap();
+
+        let results = index.search("ranking", None, None, 10).unwrap();
+
+        assert_eq!(results[0].session.id, "recent");
+    }
+
+    #[test]
+    fn strong_old_exact_match_beats_recent_fuzzy_match() {
+        let temp = tempdir().unwrap();
+        let index = SessionIndex::open(temp.path().join("index")).unwrap();
+        index
+            .update_sessions(&[
+                session_at(
+                    "old-exact",
+                    "claude",
+                    "Authentication investigation",
+                    "/work/api",
+                    "authentication failure",
+                    ChronoDuration::days(90),
+                ),
+                session_at(
+                    "recent-fuzzy",
+                    "claude",
+                    "Investigation",
+                    "/work/api",
+                    "authentcation failure",
+                    ChronoDuration::hours(1),
+                ),
+            ])
+            .unwrap();
+
+        let results = index.search("authentication", None, None, 10).unwrap();
+
+        assert_eq!(results[0].session.id, "old-exact");
     }
 
     #[test]

@@ -95,7 +95,9 @@ Search combines:
 - Bounded, single-token directory/path matching
 - Structured agent, directory, and date filters
 
-Exact matches rank first, but queries such as `auth midleware` can still find “authentication middleware,” and a token such as `backend` can match `/work/backend`.
+Text relevance remains the primary ranking signal, but recent sessions receive a smooth, bounded boost. The multiplier follows `1 + 1.5 × 2^(-age / 14 days)`: it starts at 2.5 for a current session, falls to 1.75 after 14 days, and approaches 1 for old sessions. Strong exact matches can still outrank weaker recent matches, while similarly relevant results favor recent activity.
+
+Queries such as `auth midleware` can still find “authentication middleware,” and a token such as `backend` can match `/work/backend`.
 
 Queries run in a worker thread. Each request receives a generation number; results from an older generation are ignored after the user types something newer.
 
