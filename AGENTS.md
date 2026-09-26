@@ -2,7 +2,7 @@
 
 ## Project
 
-- `fast-resume` is a Rust 2024 CLI and Ratatui application. The binary is `fr`.
+- `cove` is a Rust 2024 CLI and Ratatui application. The binary is `cove`.
 - Read `docs/development.md` for the source map and validation workflow.
 - Read `docs/how-it-works.md` before changing adapters, refresh behavior, search, or resume handoff.
 - Keep the README focused on discovery. Put detailed user behavior in `docs/usage.md`.

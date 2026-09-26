@@ -1,13 +1,13 @@
 [package]
-name = "fast-resume"
-version = "2.12.0"
+name = "cove"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Fast fuzzy finder for coding agent session history"
+description = "Cove: your coding-agent chats, organized into workspaces"
 license = "MIT"
 
 [[bin]]
-name = "fr"
+name = "cove"
 path = "src/main.rs"
 
 [dependencies]

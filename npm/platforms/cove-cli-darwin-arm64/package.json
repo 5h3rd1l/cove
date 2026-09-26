@@ -1,0 +1,18 @@
+{
+  "name": "cove-cli",
+  "version": "0.1.0-darwin-arm64",
+  "description": "Cove native binary for macOS Apple Silicon",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

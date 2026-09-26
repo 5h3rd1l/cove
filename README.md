@@ -1,102 +1,59 @@
-<p align="center">
-  <img src="assets/logo.png" alt="fast-resume" width="120" height="120">
-</p>
+# ◆ cove
 
-# fast-resume
+**Your coding-agent chats, in order.**
 
-Search and resume conversations across Claude Code, Codex, Pi, and more, all from one terminal UI.
+Cove is a terminal app for everyone who talks to coding agents all day. It finds every chat you have had with Claude Code, Codex, opencode and friends, lets you **group them into workspaces**, **rename them**, and jump straight back into any of them.
 
-Coding agents can resume previous sessions, but searching those sessions is often limited or title-only. `fast-resume` builds a single full-text index over your local agent history so you can find a prompt, response, project, or session and jump straight back in.
+```
+cove                 open the app
+cove "auth bug"      open it with a search already typed
+cove --list          print your chats instead of opening the app
+```
 
-<https://github.com/user-attachments/assets/60f6e128-2ae4-431d-8a87-097f600b6d04>
+`cv` is the short form of `cove`: everything above works with `cv` too.
 
-## Highlights
+## What you get
 
-- Search titles, directories, user messages, and assistant responses across every supported agent.
-- Find imperfect matches with typo-tolerant Tantivy search and exact-match ranking.
-- Filter by agent, directory, and date from the command line or directly in the search box.
-- Preview conversations, copy resume commands, or hand off directly to the original agent.
-- Start immediately from the existing index while changed sessions refresh in the background.
-- Use agent artwork, mouse controls, responsive filters, and compact layouts in the Ratatui TUI.
+- **Workspaces.** One per project. Drag a chat onto a workspace, or press `F3`. Each workspace gets its own color.
+- **Names you choose.** Double-click a chat (or press `F2`) and call it what it actually is.
+- **Instant search.** Titles, messages and folders, across every agent, with a live preview. Filter with `agent:claude`, `dir:project`, `date:today`.
+- **A safe trash.** Delete a chat or a whole workspace and it lands in **Deleted**, where you can browse it and restore it. Erasing for good is a separate, confirmed step.
+- **Keyboard or mouse.** `←` `→` move between the workspace list and your chats, `/` jumps to search, and typing anywhere searches.
+- **Resume in one key.** `Enter` reopens the chat in its agent, in its folder.
 
-## Supported agents
+## Your chats are never touched
 
-Antigravity CLI, Claude Code, Codex, Copilot CLI, Copilot in VS Code, Crush, Cursor CLI, Grok Build, Kimi Code, OpenCode, Pi, and Vibe. See [how it works](docs/how-it-works.md#session-adapters) for storage formats and resume behavior.
+Cove only *reads* your agents' history. Workspaces, names and the trash live in one small file, `~/.local/state/cove/state.json`. Deleting something in Cove never deletes a chat from Claude, Codex or opencode, and `claude --resume` keeps working for everything.
+
+## Keys
+
+| | |
+|---|---|
+| `Enter` | resume the chat |
+| `/` or just type | search |
+| `←` `→` | workspace list / chats |
+| `F2` | rename the chat (or the workspace, when the list is focused) |
+| `F3` or drag | move the chat to a workspace |
+| `F4` | new workspace |
+| `F8` or `Delete` | delete (in **Deleted**: `F8` restores, `Delete` erases for good) |
+| `Ctrl+O` | hide or show the workspace list |
+| `F1` | every shortcut |
 
 ## Install
 
-Homebrew is the simplest option on macOS and Linux:
-
 ```bash
-brew tap angristan/tap
-brew install fast-resume
+git clone https://github.com/5h3rd1l/cove.git && cd cove
+cargo build --release
+ln -sf "$PWD/target/release/cove" ~/.local/bin/cove
+ln -sf "$PWD/target/release/cove" ~/.local/bin/cv    # optional short form
 ```
 
-Nix users can run directly from the source package:
+Needs Rust 1.88 or newer. The first run builds a search index in `~/.cache/cove`.
 
-```bash
-nix run github:angristan/fast-resume
-```
+## Coming from `frw`?
 
-You can also install with npm or a binary wheel with `uv`:
+Cove was called `frw` while it was a fork. On first launch it adopts your old workspaces from `~/.local/state/frw/` automatically, so nothing is lost. The old file is left in place.
 
-```bash
-npm install --global fast-resume
-# or
-uv tool install fast-resume
-```
+## Credits
 
-See the [installation guide](docs/installation.md) for Nix, npm, `uvx`, Cargo, supported platforms, and terminal recommendations.
-
-## Quick start
-
-```bash
-# Search all sessions interactively
-fr
-
-# Start with a query or filters
-fr "authentication bug"
-fr -a codex -d backend "api error"
-
-# Search without opening the TUI
-fr --list "agent:claude date:<2d auth"
-
-# Inspect or rebuild the local index
-fr --stats
-fr --rebuild
-```
-
-Inside the TUI, use the arrow keys to select a session and press `Enter` to resume it. `Tab` completes filters or cycles agents, `Ctrl+P` toggles the preview, and `Ctrl+Y` copies the resume command.
-
-## Agent usage
-
-Coding agents can use the stable JSON output instead of parsing the human table:
-
-```bash
-fr --json --limit 10 "dir:backend authentication bug"
-fr --json --limit 10 --offset 10 "dir:backend authentication bug"
-```
-
-Run `fr --agent-context` to print the bundled [Agent Skill](skills/fast-resume/SKILL.md) with safe search, pagination, and resume guidance.
-
-## Documentation
-
-- [Installation](docs/installation.md) — packages, platforms, terminals, and upgrades
-- [Usage](docs/usage.md) — search syntax, CLI options, keybindings, yolo mode, and statistics
-- [How it works](docs/how-it-works.md) — adapters, indexing, search, refresh safety, and resume handoff
-- [Development](docs/development.md) — local setup, validation, project layout, and release packaging
-
-## Configuration
-
-No configuration is required. The Tantivy index follows the XDG Base Directory specification. It lives at `$XDG_CACHE_HOME/fast-resume/tantivy_index` when `XDG_CACHE_HOME` is an absolute path, or at `~/.cache/fast-resume/tantivy_index` by default. It is rebuilt automatically when its schema changes.
-
-To reset it manually:
-
-```bash
-rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/fast-resume"
-fr --rebuild
-```
-
-## License
-
-MIT
+Cove is built on the excellent [fast-resume](https://github.com/angristan/fast-resume) by Stanislas Lange, which provides the session indexing, agent adapters and search engine. See [NOTICE.md](NOTICE.md).

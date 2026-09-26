@@ -448,6 +448,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "cove"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "crossterm",
+ "dirs",
+ "fs4",
+ "image",
+ "once_cell",
+ "ratatui",
+ "ratatui-image",
+ "rayon",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tempfile",
+ "terminal-light",
+ "unicode-width",
+ "url",
+ "walkdir",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -770,35 +799,6 @@ checksum = "b95f7c0680e4142284cf8b22c14a476e87d61b004a3a0861872b32ef7ead40a2"
 dependencies = [
  "bit-set",
  "regex",
-]
-
-[[package]]
-name = "fast-resume"
-version = "2.12.0"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "chrono-tz",
- "clap",
- "crossterm",
- "dirs",
- "fs4",
- "image",
- "once_cell",
- "ratatui",
- "ratatui-image",
- "rayon",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "tantivy",
- "tempfile",
- "terminal-light",
- "unicode-width",
- "url",
- "walkdir",
 ]
 
 [[package]]

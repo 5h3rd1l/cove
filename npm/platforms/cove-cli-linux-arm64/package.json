@@ -1,0 +1,21 @@
+{
+  "name": "cove-cli",
+  "version": "0.1.0-linux-arm64",
+  "description": "Cove native binary for Linux arm64",
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "bin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

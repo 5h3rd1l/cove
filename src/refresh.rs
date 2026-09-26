@@ -20,7 +20,7 @@ enum AdapterEvent {
 }
 
 pub fn scan_all_sessions() -> Vec<Session> {
-    let trace_refresh = env::var_os("FAST_RESUME_TRACE_REFRESH").is_some();
+    let trace_refresh = env::var_os("COVE_TRACE_REFRESH").is_some();
     let sessions: Vec<_> = all_adapters()
         .into_par_iter()
         .flat_map(|adapter| {
@@ -56,7 +56,7 @@ where
     let known = std::sync::Arc::new(index.known_sessions()?);
     let mut updater = index.updater(commit_interval);
     let (tx, rx) = mpsc::channel();
-    let trace_refresh = env::var_os("FAST_RESUME_TRACE_REFRESH").is_some();
+    let trace_refresh = env::var_os("COVE_TRACE_REFRESH").is_some();
     for adapter in all_adapters() {
         let tx = tx.clone();
         let known = std::sync::Arc::clone(&known);

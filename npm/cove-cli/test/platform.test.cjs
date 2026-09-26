@@ -38,7 +38,7 @@ test("keeps native package metadata in sync", () => {
         path.join(npmRoot, "platforms", packageAlias, "package.json"),
       ),
     );
-    const variant = packageAlias.replace(/^fast-resume-/, "");
+    const variant = packageAlias.replace(/^cove-cli-/, "");
     const variantVersion = `${launcherPackage.version}-${variant}`;
 
     assert.equal(metadata.name, launcherPackage.name);

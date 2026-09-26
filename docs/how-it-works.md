@@ -1,8 +1,8 @@
-# How fast-resume works
+# How cove works
 
 ## Overview
 
-fast-resume normalizes local session data from each supported coding agent, stores searchable fields in Tantivy, and hands the selected session back to its original agent CLI.
+cove normalizes local session data from each supported coding agent, stores searchable fields in Tantivy, and hands the selected session back to its original agent CLI.
 
 ```text
 Agent stores ──► adapters ──► normalized sessions ──► Tantivy index
@@ -53,13 +53,13 @@ The index focuses on conversation text: prompts and assistant responses. Most la
 
 ## Indexing and refresh
 
-The persistent index follows the XDG Base Directory specification. It lives at `$XDG_CACHE_HOME/fast-resume/tantivy_index` when `XDG_CACHE_HOME` is an absolute path. Otherwise, it lives at:
+The persistent index follows the XDG Base Directory specification. It lives at `$XDG_CACHE_HOME/cove/tantivy_index` when `XDG_CACHE_HOME` is an absolute path. Otherwise, it lives at:
 
 ```text
-~/.cache/fast-resume/tantivy_index
+~/.cache/cove/tantivy_index
 ```
 
-On an incremental refresh, fast-resume:
+On an incremental refresh, cove:
 
 1. Acquires a cross-process refresh lock.
 2. Reloads the latest committed index state.
@@ -70,7 +70,7 @@ On an incremental refresh, fast-resume:
 7. Infers deletions only when the relevant scan is complete.
 8. Applies changes through one index writer and reports progress to the TUI. A TUI refresh commits about once per second so new results appear while it runs; non-interactive refreshes commit once at the end.
 
-Only one process refreshes the index at a time. Concurrent `fr --list` and `fr --json` calls wait for exclusive access, reload the latest committed index, and then run their own incremental refresh. This keeps every invocation current without allowing refresh batches to interleave. Cold initialization uses the same lock, so its source scan also runs serially. A call that has to wait prints a notice on stderr; `--no-refresh` skips the refresh entirely and serves the last committed index immediately.
+Only one process refreshes the index at a time. Concurrent `cove --list` and `cove --json` calls wait for exclusive access, reload the latest committed index, and then run their own incremental refresh. This keeps every invocation current without allowing refresh batches to interleave. Cold initialization uses the same lock, so its source scan also runs serially. A call that has to wait prints a notice on stderr; `--no-refresh` skips the refresh entirely and serves the last committed index immediately.
 
 File-backed adapters normally use modification times. Antigravity and Cursor include SQLite WAL modification times, while database-backed adapters include their relevant message and part activity; Crush also fingerprints the final indexed projection so same-second edits are detected.
 
@@ -135,11 +135,11 @@ Each adapter returns the command needed to continue its session:
 | Pi | `pi --session <id>` | No change |
 | Vibe | `vibe --resume <id>` | `vibe --agent auto-approve --resume <id>` |
 
-`exec()` replaces fast-resume with the agent process, and the agent receives the session's working directory.
+`exec()` replaces cove with the agent process, and the agent receives the session's working directory.
 
 ## Performance
 
-fast-resume avoids a full parse on ordinary launches:
+cove avoids a full parse on ordinary launches:
 
 - Adapters scan concurrently.
 - The current index is searchable before refresh finishes.

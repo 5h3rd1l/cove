@@ -6,13 +6,13 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
-use fast_resume::adapters::all_adapters;
-use fast_resume::config::{VERSION, index_dir, is_agent};
-use fast_resume::index::SessionIndex;
-use fast_resume::output::{DEFAULT_LIST_LIMIT, print_sessions_json, print_sessions_table};
-use fast_resume::search::SearchEngine;
-use fast_resume::stats::print_stats;
-use fast_resume::tui::{ThemeMode, TuiExit, run_tui};
+use cove::adapters::all_adapters;
+use cove::config::{VERSION, index_dir, is_agent};
+use cove::index::SessionIndex;
+use cove::output::{DEFAULT_LIST_LIMIT, print_sessions_json, print_sessions_table};
+use cove::search::SearchEngine;
+use cove::stats::print_stats;
+use cove::tui::{ThemeMode, TuiExit, run_tui};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum ImageProtocolArg {
@@ -30,7 +30,12 @@ enum ThemeArg {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "fr", version = VERSION, about = "Search and resume coding agent sessions")]
+#[command(
+    name = "cove",
+    version = VERSION,
+    about = "Cove: your coding-agent chats, organized into workspaces",
+    after_help = "Built on fast-resume by Stanislas Lange (MIT). See NOTICE.md."
+)]
 struct Args {
     /// Search query.
     query: Option<String>,
@@ -91,7 +96,7 @@ struct Args {
     #[arg(
         long,
         value_enum,
-        env = "FAST_RESUME_THEME",
+        env = "COVE_THEME",
         default_value_t = ThemeArg::Auto
     )]
     theme: ThemeArg,
@@ -112,7 +117,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.agent_context {
-        print!("{}", include_str!("../skills/fast-resume/SKILL.md"));
+        print!("{}", include_str!("../skills/cove/SKILL.md"));
         return Ok(());
     }
     validate_pagination_args(&args)?;
@@ -214,7 +219,7 @@ impl From<ThemeArg> for ThemeMode {
     }
 }
 
-impl From<ImageProtocolArg> for fast_resume::tui::ImageProtocol {
+impl From<ImageProtocolArg> for cove::tui::ImageProtocol {
     fn from(value: ImageProtocolArg) -> Self {
         match value {
             ImageProtocolArg::Auto => Self::Auto,
@@ -261,7 +266,7 @@ fn refreshed_index(no_refresh: bool) -> Result<SessionIndex> {
     }
     index.refresh_incremental_notify(|| {
         eprintln!(
-            "Waiting for another fr process to finish refreshing; pass --no-refresh to search the current index."
+            "Waiting for another cove process to finish refreshing; pass --no-refresh to search the current index."
         );
     })?;
     Ok(index)
@@ -376,7 +381,7 @@ mod tests {
 
     #[test]
     fn accepts_legacy_no_version_check_flag() {
-        let args = Args::try_parse_from(["fr", "--no-version-check", "--list"]).unwrap();
+        let args = Args::try_parse_from(["cove", "--no-version-check", "--list"]).unwrap();
 
         assert!(args._no_version_check);
         assert!(args.list_only);
@@ -384,7 +389,7 @@ mod tests {
 
     #[test]
     fn accepts_explicit_tui_theme() {
-        let args = Args::try_parse_from(["fr", "--theme", "light"]).unwrap();
+        let args = Args::try_parse_from(["cove", "--theme", "light"]).unwrap();
 
         assert_eq!(args.theme, ThemeArg::Light);
     }

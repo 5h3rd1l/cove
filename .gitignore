@@ -24,3 +24,7 @@ __pycache__/
 .vscode/
 *.swp
 *.swo
+
+# npm release artifacts
+/dist/
+/npm/platforms/*/bin/

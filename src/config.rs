@@ -8,6 +8,10 @@ use serde_json::Value;
 use once_cell::sync::Lazy;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The product's identity. Everything user-visible takes its name from here.
+pub const APP_NAME: &str = "cove";
+pub const APP_TAGLINE: &str = "your agent chats, in order";
 pub const INDEX_SCHEMA_VERSION: u32 = 24;
 
 pub const AGENT_ORDER: [&str; 12] = [
@@ -165,7 +169,7 @@ fn cache_dir_from(xdg_cache_home: Option<PathBuf>, home: &Path) -> PathBuf {
     xdg_cache_home
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| home.join(".cache"))
-        .join("fast-resume")
+        .join(APP_NAME)
 }
 
 pub fn index_dir() -> PathBuf {

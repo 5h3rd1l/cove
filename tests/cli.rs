@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn run_fr(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_fr"))
+    Command::new(env!("CARGO_BIN_EXE_cove"))
         .args(args)
         .env_clear()
         .env("HOME", home)
@@ -480,7 +480,7 @@ fn xdg_cache_home_controls_index_location() {
     let xdg_cache_home = temp.path().join("custom-cache");
     write_codex_session(temp.path(), "xdg123", "/repo/backend", "XDG cache");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_fr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cove"))
         .arg("--list")
         .env_clear()
         .env("HOME", temp.path())
@@ -491,10 +491,10 @@ fn xdg_cache_home_controls_index_location() {
 
     assert!(
         xdg_cache_home
-            .join("fast-resume/tantivy_index/meta.json")
+            .join("cove/tantivy_index/meta.json")
             .is_file()
     );
-    assert!(!temp.path().join(".cache/fast-resume").exists());
+    assert!(!temp.path().join(".cache/cove").exists());
 }
 
 #[test]
@@ -507,7 +507,7 @@ fn relative_xdg_cache_home_is_ignored() {
         "Invalid XDG cache",
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_fr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cove"))
         .arg("--list")
         .env_clear()
         .env("HOME", temp.path())
@@ -518,7 +518,7 @@ fn relative_xdg_cache_home_is_ignored() {
 
     assert!(
         temp.path()
-            .join(".cache/fast-resume/tantivy_index/meta.json")
+            .join(".cache/cove/tantivy_index/meta.json")
             .is_file()
     );
 }
@@ -529,9 +529,7 @@ fn broken_index_fails_loudly_instead_of_reporting_zero_sessions() {
     write_codex_session(temp.path(), "broken123", "/repo/backend", "Broken index");
     assert_success(run_fr(temp.path(), &["--list"]));
 
-    let meta = temp
-        .path()
-        .join(".cache/fast-resume/tantivy_index/meta.json");
+    let meta = temp.path().join(".cache/cove/tantivy_index/meta.json");
     fs::write(meta, "not json").unwrap();
 
     let (stdout, stderr) = assert_failure(run_fr(temp.path(), &["--json"]));
@@ -568,7 +566,7 @@ fn flag_polish_covers_alias_conflicts_and_stats_filters() {
 
     let (context_stdout, _) =
         assert_success(run_fr(temp.path(), &["--agent-context", "--limit", "5"]));
-    assert!(context_stdout.starts_with("---\nname: fast-resume\n"));
+    assert!(context_stdout.starts_with("---\nname: cove\n"));
 
     let (stdout, stderr) = assert_failure(run_fr(temp.path(), &["--images", "--no-images"]));
     assert!(stdout.is_empty());
@@ -592,11 +590,11 @@ fn incremental_refresh_after_rebuild_reparses_nothing() {
     );
     assert_success(run_fr(temp.path(), &["--rebuild", "--list"]));
 
-    let output = Command::new(env!("CARGO_BIN_EXE_fr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cove"))
         .arg("--list")
         .env_clear()
         .env("HOME", temp.path())
-        .env("FAST_RESUME_TRACE_REFRESH", "1")
+        .env("COVE_TRACE_REFRESH", "1")
         .output()
         .unwrap();
     let (_, stderr) = assert_success(output);
@@ -641,8 +639,8 @@ fn agent_context_exposes_the_portable_skill() {
     let (stdout, stderr) = assert_success(run_fr(temp.path(), &["--agent-context"]));
 
     assert!(stderr.is_empty());
-    assert!(stdout.starts_with("---\nname: fast-resume\n"));
-    assert!(stdout.contains("fr --json --limit 10"));
+    assert!(stdout.starts_with("---\nname: cove\n"));
+    assert!(stdout.contains("cove --json --limit 10"));
     assert!(stdout.contains("meta.next_offset"));
 }
 

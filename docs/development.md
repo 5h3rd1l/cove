@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/angristan/fast-resume.git
-cd fast-resume
+git clone https://github.com/angristan/cove.git
+cd cove
 cargo run --
 ```
 
@@ -32,7 +32,7 @@ CI fails on any Clippy warning. Fix warnings or add a narrow, explicit `#[allow]
 ## Project layout
 
 ```text
-fast-resume/
+cove/
 ├── src/
 │   ├── main.rs             # Clap CLI and resume process handoff
 │   ├── config.rs           # Agent metadata, paths, and schema version
@@ -76,7 +76,7 @@ The Nix flake builds directly from the repository source and committed
 `Cargo.lock`. Its package version comes from `Cargo.toml`, so release commits do
 not need a separate Nix version bump. CI checks the package on Linux and macOS.
 
-`maturin` builds PyPI wheels containing the Rust binary and compatibility commands. The same wheel builds supply npm's native variants. All variants use the `fast-resume` package name with platform prerelease versions such as `2.7.0-linux-x64`. The launcher selects one through an npm alias in `optionalDependencies`; it does not download code from an install script.
+`maturin` builds PyPI wheels containing the Rust binary and compatibility commands. The same wheel builds supply npm's native variants. All variants use the `cove` package name with platform prerelease versions such as `2.7.0-linux-x64`. The launcher selects one through an npm alias in `optionalDependencies`; it does not download code from an install script.
 
 Release automation also builds standalone macOS and Linux archives and dispatches the Homebrew formula update. Pull-request CI builds and installs wheels for macOS ARM64/Intel and Linux ARM64/x86_64. Release and publishing jobs run after a qualifying push to `master`, or through a manual workflow run that resumes an existing release.
 
@@ -90,14 +90,14 @@ npm requires a package to exist before it can have a trusted publisher. Claim th
 
 ```bash
 npm login
-npm publish ./npm/fast-resume --access public --tag bootstrap
-npm trust github fast-resume \
-  --repo angristan/fast-resume \
+npm publish ./npm/cove --access public --tag bootstrap
+npm trust github cove \
+  --repo angristan/cove \
   --file workflow.yml \
   --allow-publish
 ```
 
-The account must use 2FA. The trusted publisher is organization or user `angristan`, repository `fast-resume`, and workflow filename `workflow.yml`. The release workflow then publishes every native variant and the launcher through GitHub OIDC with provenance. It does not use an npm token. After a successful OIDC release, disallow token publishing in the npm package settings.
+The account must use 2FA. The trusted publisher is organization or user `angristan`, repository `cove`, and workflow filename `workflow.yml`. The release workflow then publishes every native variant and the launcher through GitHub OIDC with provenance. It does not use an npm token. After a successful OIDC release, disallow token publishing in the npm package settings.
 
 ## Documentation
 

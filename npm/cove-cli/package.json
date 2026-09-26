@@ -1,0 +1,40 @@
+{
+  "name": "cove-cli",
+  "version": "0.1.0",
+  "description": "Cove: your coding-agent chats, organized into workspaces",
+  "license": "MIT",
+  "keywords": [
+    "cli",
+    "coding-agents",
+    "claude-code",
+    "codex",
+    "opencode",
+    "workspaces",
+    "sessions",
+    "tui"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "cove": "bin/cove.cjs",
+    "cv": "bin/cove.cjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "NOTICE.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "optionalDependencies": {
+    "cove-cli-darwin-arm64": "npm:cove-cli@0.1.0-darwin-arm64",
+    "cove-cli-darwin-x64": "npm:cove-cli@0.1.0-darwin-x64",
+    "cove-cli-linux-arm64": "npm:cove-cli@0.1.0-linux-arm64",
+    "cove-cli-linux-x64": "npm:cove-cli@0.1.0-linux-x64"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

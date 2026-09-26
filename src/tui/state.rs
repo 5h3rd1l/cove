@@ -1,4 +1,5 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::config::{AGENT_ORDER, is_agent};
@@ -10,6 +11,7 @@ use super::images::AgentImages;
 use super::preview::render_preview_lines;
 use super::text::char_to_byte_idx;
 use super::theme::Theme;
+use super::workspaces::{ALL, LineEdit, NONE, TRASH, Workspaces};
 
 const DATE_SUGGESTIONS: [&str; 4] = ["today", "yesterday", "week", "month"];
 
@@ -41,6 +43,7 @@ pub(super) struct SearchRequest {
     pub(super) directory_filter: Option<String>,
     pub(super) preserve_selection: Option<(String, String)>,
     pub(super) reload_index: bool,
+    pub(super) limit: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +57,91 @@ pub(super) struct YoloModal {
     pub(super) action: PendingAction,
     pub(super) session: Session,
     pub(super) selected: bool,
+}
+
+/// A destructive step waiting for a yes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ConfirmAction {
+    PurgeChat {
+        id: String,
+        title: String,
+    },
+    PurgeWorkspace {
+        id: String,
+        name: String,
+        chats: usize,
+    },
+}
+
+/// Which pane the keyboard is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Focus {
+    Search,
+    Chats,
+    Sidebar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum EditTarget {
+    Chat { id: String, original: String },
+    Workspace(String),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Edit {
+    pub(super) target: EditTarget,
+    pub(super) line: LineEdit,
+}
+
+/// "Move chat to workspace" dialog.
+#[derive(Debug, Clone)]
+pub(super) struct Picker {
+    pub(super) session_id: String,
+    /// (workspace id or `NONE`, label)
+    pub(super) items: Vec<(String, String)>,
+    pub(super) selected: usize,
+}
+
+/// A chat being dragged with the mouse.
+#[derive(Debug, Clone)]
+pub(super) struct Drag {
+    pub(super) session_id: String,
+    pub(super) title: String,
+    pub(super) start: (u16, u16),
+    pub(super) pos: (u16, u16),
+    pub(super) active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowKind {
+    All,
+    Workspace,
+    Unsorted,
+    /// The Deleted view.
+    Deleted,
+    /// A deleted workspace, listed under Deleted so it can be restored.
+    DeletedWorkspace,
+    New,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SidebarRow {
+    pub(super) kind: RowKind,
+    /// Scope id: `ALL`, `NONE` or a workspace id (empty for `New`).
+    pub(super) scope: String,
+    pub(super) name: String,
+    pub(super) count: usize,
+    /// Color slot, for workspace rows.
+    pub(super) color: Option<usize>,
+}
+
+impl SidebarRow {
+    pub(super) fn droppable(&self) -> bool {
+        matches!(
+            self.kind,
+            RowKind::Workspace | RowKind::Unsorted | RowKind::Deleted
+        )
+    }
 }
 
 struct PreviewCache {
@@ -83,6 +171,18 @@ pub(super) struct AppState {
     pub(super) modal: Option<YoloModal>,
     pub(super) images: Option<AgentImages>,
     pub(super) theme: Theme,
+    pub(super) ws: Workspaces,
+    live_ids: HashSet<String>,
+    counts: BTreeMap<String, usize>,
+    pub(super) show_sidebar: bool,
+    results_top: Cell<usize>,
+    pub(super) focus: Focus,
+    sidebar_on_screen: Cell<bool>,
+    pub(super) edit: Option<Edit>,
+    pub(super) picker: Option<Picker>,
+    pub(super) confirm: Option<ConfirmAction>,
+    pub(super) drag: Option<Drag>,
+    pub(super) last_click: Option<(std::time::Instant, u16, u16)>,
     search_generation: u64,
     applied_search_generation: u64,
     search_requested: bool,
@@ -122,6 +222,10 @@ impl AppState {
         images: Option<AgentImages>,
         theme: Theme,
     ) -> Self {
+        #[cfg(test)]
+        let ws = Workspaces::in_memory();
+        #[cfg(not(test))]
+        let ws = Workspaces::load();
         let mut state = Self {
             engine,
             preview_cache: RefCell::new(None),
@@ -142,12 +246,25 @@ impl AppState {
             modal: None,
             images,
             theme,
+            ws,
+            live_ids: HashSet::new(),
+            counts: BTreeMap::new(),
+            show_sidebar: true,
+            results_top: Cell::new(0),
+            focus: Focus::Chats,
+            sidebar_on_screen: Cell::new(false),
+            edit: None,
+            picker: None,
+            confirm: None,
+            drag: None,
+            last_click: None,
             search_generation: 0,
             applied_search_generation: 0,
             search_requested: false,
             search_preserve_selection: None,
             search_reload_requested: false,
         };
+        state.refresh_live();
         state.refresh_search();
         state
     }
@@ -168,12 +285,13 @@ impl AppState {
         let start = Instant::now();
         let agent_filter = self.effective_agent_filter();
         let directory_filter = self.effective_directory_filter();
-        self.visible = self.engine.search(
+        let found = self.engine.search(
             &self.query,
             agent_filter.as_deref(),
             directory_filter.as_deref(),
-            100,
+            self.search_limit(),
         );
+        self.visible = self.scoped(found);
         self.last_search_ms = start.elapsed().as_secs_f64() * 1000.0;
         self.update_selection_after_search(selected_session.as_ref());
         self.preview_scroll = 0;
@@ -211,6 +329,7 @@ impl AppState {
             directory_filter: self.effective_directory_filter(),
             preserve_selection,
             reload_index,
+            limit: self.search_limit(),
         })
     }
 
@@ -225,7 +344,7 @@ impl AppState {
             return false;
         }
         let selected_session = preserve_selection.and_then(|_| self.selected_session_key());
-        self.visible = visible;
+        self.visible = self.scoped(visible);
         self.last_search_ms = elapsed_ms;
         self.applied_search_generation = generation;
         self.update_selection_after_search(selected_session.as_ref());
@@ -245,6 +364,460 @@ impl AppState {
         self.search_preserve_selection = None;
         self.status = format!("search failed: {error}");
         true
+    }
+
+    // ---- workspaces ----------------------------------------------------
+
+    /// Chats in a workspace can be anywhere in the ranking, so a workspace
+    /// view fetches far more than the default 100 before filtering.
+    fn search_limit(&self) -> usize {
+        if self.ws.scope() == ALL && !self.ws.has_hidden() {
+            100
+        } else {
+            10_000
+        }
+    }
+
+    /// Keep what belongs in the open view. Deleted chats only show in the
+    /// Deleted view.
+    fn scoped(&self, mut sessions: Vec<Session>) -> Vec<Session> {
+        let scope = self.ws.scope();
+        sessions.retain(|session| !self.ws.is_purged(&session.id));
+        if scope == TRASH {
+            sessions.retain(|session| self.ws.is_trashed(&session.id));
+            return sessions;
+        }
+        if self.ws.deleted_name_of(scope).is_some() {
+            // Looking inside a deleted workspace, without restoring it.
+            sessions.retain(|session| self.ws.trashed_with(&session.id) == Some(scope));
+            return sessions;
+        }
+        sessions.retain(|session| !self.ws.is_trashed(&session.id));
+        if scope == ALL {
+            sessions.truncate(100);
+        } else {
+            sessions.retain(|session| self.ws.ws_of(&session.id) == scope);
+        }
+        sessions
+    }
+
+    /// Re-read which chats exist, for the sidebar counts.
+    pub(super) fn refresh_live(&mut self) {
+        self.live_ids = self
+            .engine
+            .search("", None, None, 100_000)
+            .into_iter()
+            .map(|session| session.id)
+            .filter(|id| !self.ws.is_purged(id))
+            .collect();
+        self.recount();
+    }
+
+    fn recount(&mut self) {
+        self.counts = self.ws.counts(&self.live_ids);
+    }
+
+    pub(super) fn title_of<'a>(&'a self, session: &'a Session) -> &'a str {
+        self.ws.display_title(session)
+    }
+
+    /// A chat's workspace as (name, color slot), if it is in one.
+    pub(super) fn ws_tag(&self, session: &Session) -> Option<(&str, usize)> {
+        let id = self.ws.ws_of(&session.id);
+        Some((self.ws.name_of(id)?, self.ws.color_index(id)?))
+    }
+
+    /// The results list shows a Workspace column where chats of several
+    /// workspaces mix.
+    /// Viewing Deleted, or a deleted workspace inside it.
+    pub(super) fn in_deleted_view(&self) -> bool {
+        let scope = self.ws.scope();
+        scope == TRASH || self.ws.deleted_name_of(scope).is_some()
+    }
+
+    pub(super) fn shows_workspace_column(&self) -> bool {
+        matches!(self.ws.scope(), ALL | TRASH)
+    }
+
+    pub(super) fn sidebar_rows(&self) -> Vec<SidebarRow> {
+        let count = |key: &str| self.counts.get(key).copied().unwrap_or(0);
+        let plain = |kind, scope: &str, name: &str, count| SidebarRow {
+            kind,
+            scope: scope.to_string(),
+            name: name.to_string(),
+            count,
+            color: None,
+        };
+        let mut rows = vec![plain(RowKind::All, ALL, "All chats", count(ALL))];
+        for ws in self.ws.list() {
+            rows.push(SidebarRow {
+                color: self.ws.color_index(&ws.id),
+                ..plain(RowKind::Workspace, &ws.id, &ws.name, count(&ws.id))
+            });
+        }
+        rows.push(plain(RowKind::Unsorted, NONE, "Unsorted", count(NONE)));
+        rows.push(plain(RowKind::Deleted, TRASH, "Deleted", count(TRASH)));
+        if self.in_deleted_view() {
+            for ws in self.ws.deleted_list() {
+                rows.push(SidebarRow {
+                    color: self.ws.color_index(&ws.id),
+                    ..plain(RowKind::DeletedWorkspace, &ws.id, &ws.name, count(&ws.id))
+                });
+            }
+        }
+        rows.push(plain(RowKind::New, "", "+ New workspace", 0));
+        rows
+    }
+
+    fn report<T>(&mut self, result: std::io::Result<T>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.status = format!("could not save workspaces: {error}");
+                None
+            }
+        }
+    }
+
+    pub(super) fn set_scope(&mut self, scope: &str) {
+        if self.ws.scope() == scope {
+            return;
+        }
+        let result = self.ws.set_scope(scope);
+        self.report(result);
+        self.request_search();
+    }
+
+    /// Previous / next workspace in sidebar order (All, workspaces, Unsorted).
+    pub(super) fn cycle_scope(&mut self, delta: isize) {
+        let scopes: Vec<String> = self
+            .sidebar_rows()
+            .into_iter()
+            .filter(|row| row.kind != RowKind::New)
+            .map(|row| row.scope)
+            .collect();
+        let current = scopes
+            .iter()
+            .position(|scope| scope == self.ws.scope())
+            .unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(scopes.len() as isize) as usize;
+        self.set_scope(&scopes[next]);
+    }
+
+    /// Arrow keys in the workspace list: like `cycle_scope` but without
+    /// wrapping. `to` jumps to the first (`Some(false)`) or last row.
+    pub(super) fn step_scope(&mut self, delta: isize, to: Option<bool>) {
+        let scopes: Vec<String> = self
+            .sidebar_rows()
+            .into_iter()
+            .filter(|row| row.kind != RowKind::New)
+            .map(|row| row.scope)
+            .collect();
+        let last = scopes.len() as isize - 1;
+        let current = scopes
+            .iter()
+            .position(|scope| scope == self.ws.scope())
+            .unwrap_or(0) as isize;
+        let next = match to {
+            Some(false) => 0,
+            Some(true) => last,
+            None => (current + delta).clamp(0, last),
+        };
+        self.set_scope(&scopes[next as usize]);
+    }
+
+    // ---- focus ---------------------------------------------------------
+
+    /// Called while drawing: whether the sidebar actually fits on screen.
+    pub(super) fn note_sidebar_on_screen(&self, on_screen: bool) {
+        self.sidebar_on_screen.set(on_screen);
+    }
+
+    pub(super) fn focus_sidebar(&mut self) {
+        if self.show_sidebar && self.sidebar_on_screen.get() {
+            self.focus = Focus::Sidebar;
+        } else {
+            self.status = "the workspace list is hidden (Ctrl+O shows it)".to_string();
+        }
+    }
+
+    /// The Delete key on a chat: delete it, or in the Deleted view erase it
+    /// for good (after asking). Restoring is F8.
+    pub(super) fn delete_key_on_chat(&mut self) {
+        if self.in_deleted_view() {
+            self.request_purge_selected_chat();
+        } else {
+            self.toggle_delete_selected();
+        }
+    }
+
+    /// The Delete key with the workspace list focused: delete the open
+    /// workspace, or erase it for good if it is already deleted.
+    pub(super) fn delete_key_on_workspace(&mut self) {
+        let scope = self.ws.scope().to_string();
+        if self.ws.name_of(&scope).is_some() {
+            self.delete_workspace(&scope);
+        } else if self.ws.deleted_name_of(&scope).is_some() {
+            self.request_purge_open_workspace();
+        } else {
+            self.status = "pick a workspace first (↑/↓)".to_string();
+        }
+    }
+
+    /// F8 with the workspace list focused: delete the open workspace,
+    /// or restore it when it is a deleted one.
+    pub(super) fn delete_or_restore_open_workspace(&mut self) {
+        let scope = self.ws.scope().to_string();
+        if self.ws.name_of(&scope).is_some() {
+            self.delete_workspace(&scope);
+        } else if self.ws.deleted_name_of(&scope).is_some() {
+            self.restore_workspace(&scope);
+        } else {
+            self.status = "pick a workspace first (↑/↓)".to_string();
+        }
+    }
+
+    pub(super) fn begin_chat_edit(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let line = LineEdit::new(self.ws.display_title(session));
+        self.edit = Some(Edit {
+            target: EditTarget::Chat {
+                id: session.id.clone(),
+                original: session.title.clone(),
+            },
+            line,
+        });
+    }
+
+    pub(super) fn begin_workspace_edit(&mut self, ws_id: &str, initial: Option<&str>) {
+        let Some(name) = self.ws.name_of(ws_id) else {
+            return;
+        };
+        let line = LineEdit::new(initial.unwrap_or(name));
+        self.show_sidebar = true;
+        self.edit = Some(Edit {
+            target: EditTarget::Workspace(ws_id.to_string()),
+            line,
+        });
+    }
+
+    /// Rename the workspace that is currently open, if it is a real one.
+    pub(super) fn begin_current_workspace_edit(&mut self) {
+        let scope = self.ws.scope().to_string();
+        if self.ws.name_of(&scope).is_some() {
+            self.begin_workspace_edit(&scope, None);
+        } else {
+            self.status = "open a workspace first (Alt+↑/↓), then rename it".to_string();
+        }
+    }
+
+    pub(super) fn commit_edit(&mut self) {
+        let Some(edit) = self.edit.take() else {
+            return;
+        };
+        let text = edit.line.text.trim().to_string();
+        match edit.target {
+            EditTarget::Chat { id, original } => {
+                let name = if text == original {
+                    String::new()
+                } else {
+                    text
+                };
+                let result = self.ws.rename_chat(&id, &name);
+                self.report(result);
+            }
+            EditTarget::Workspace(id) => {
+                if !text.is_empty() {
+                    let result = self.ws.rename(&id, &text);
+                    self.report(result);
+                }
+            }
+        }
+    }
+
+    pub(super) fn new_workspace(&mut self) {
+        let added = self.ws.add("New workspace");
+        let Some(id) = self.report(added) else {
+            return;
+        };
+        self.recount();
+        self.set_scope(&id);
+        self.begin_workspace_edit(&id, Some(""));
+    }
+
+    /// Move a chat to a workspace, Unsorted or Deleted. Moving a deleted chat
+    /// anywhere else restores it.
+    pub(super) fn move_session_to(&mut self, session_id: &str, ws_id: &str) {
+        let was_deleted = self.ws.is_trashed(session_id);
+        let result = if ws_id == TRASH {
+            self.ws.trash_chat(session_id)
+        } else {
+            self.ws.move_session(session_id, ws_id)
+        };
+        if self.report(result).is_none() {
+            return;
+        }
+        self.recount();
+        let place = self.ws.scope_label(ws_id);
+        self.status = match (ws_id == TRASH, was_deleted) {
+            (true, _) => "moved to Deleted (restore it from there)".to_string(),
+            (false, true) => format!("restored to {place}"),
+            (false, false) => format!("moved to {place}"),
+        };
+        self.request_search_preserving_selection(false);
+    }
+
+    /// F8: delete the selected chat, or restore it when viewing Deleted.
+    pub(super) fn toggle_delete_selected(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let id = session.id.clone();
+        if self.ws.is_trashed(&id) {
+            let result = self.ws.restore_chat(&id);
+            if self.report(result).is_some() {
+                self.recount();
+                self.status = format!("restored to {}", self.ws.scope_label(self.ws.ws_of(&id)));
+                self.request_search_preserving_selection(false);
+            }
+        } else {
+            self.move_session_to(&id, TRASH);
+        }
+    }
+
+    /// F9: ask before deleting the selected chat for good. Only chats that are
+    /// already in Deleted can be.
+    pub(super) fn request_purge_selected_chat(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        if !self.ws.is_trashed(&session.id) {
+            self.status = "delete it first (F8); then it can be erased from Deleted".to_string();
+            return;
+        }
+        self.confirm = Some(ConfirmAction::PurgeChat {
+            id: session.id.clone(),
+            title: self.ws.display_title(session).to_string(),
+        });
+    }
+
+    /// Ask before deleting the open (deleted) workspace for good.
+    pub(super) fn request_purge_open_workspace(&mut self) {
+        let scope = self.ws.scope().to_string();
+        let Some(name) = self.ws.deleted_name_of(&scope).map(str::to_string) else {
+            self.status = "open a deleted workspace first, then erase it".to_string();
+            return;
+        };
+        let chats = self.ws.trashed_in(&scope).len();
+        self.confirm = Some(ConfirmAction::PurgeWorkspace {
+            id: scope,
+            name,
+            chats,
+        });
+    }
+
+    /// The answer to the confirmation dialog.
+    pub(super) fn answer_confirm(&mut self, yes: bool) {
+        let Some(action) = self.confirm.take() else {
+            return;
+        };
+        if !yes {
+            return;
+        }
+        let result = match &action {
+            ConfirmAction::PurgeChat { id, .. } => self.ws.purge_chat(id),
+            ConfirmAction::PurgeWorkspace { id, .. } => self.ws.purge_workspace(id),
+        };
+        if self.report(result).is_none() {
+            return;
+        }
+        self.recount();
+        match action {
+            ConfirmAction::PurgeChat { .. } => {
+                self.status = "deleted for good".to_string();
+                self.request_search_preserving_selection(false);
+            }
+            ConfirmAction::PurgeWorkspace { name, chats, .. } => {
+                self.status = format!("deleted “{name}” and {chats} chat(s) for good");
+                self.request_search();
+            }
+        }
+    }
+
+    /// Restore the deleted workspace the selected chat was deleted with,
+    /// together with everything else deleted with it.
+    pub(super) fn restore_selected_workspace(&mut self) {
+        let open = self.ws.scope().to_string();
+        if self.ws.deleted_name_of(&open).is_some() {
+            self.restore_workspace(&open);
+            return;
+        }
+        let Some(ws_id) = self
+            .selected_session()
+            .and_then(|session| self.ws.trashed_with(&session.id))
+            .map(str::to_string)
+        else {
+            self.status = "this chat was not deleted with a workspace".to_string();
+            return;
+        };
+        self.restore_workspace(&ws_id);
+    }
+
+    pub(super) fn restore_workspace(&mut self, ws_id: &str) {
+        let name = self
+            .ws
+            .deleted_name_of(ws_id)
+            .unwrap_or("workspace")
+            .to_string();
+        let result = self.ws.restore_workspace(ws_id);
+        if self.report(result).is_none() {
+            return;
+        }
+        self.recount();
+        self.status = format!("restored workspace “{name}”");
+        self.request_search_preserving_selection(false);
+    }
+
+    pub(super) fn open_picker(&mut self) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let current = self.ws.ws_of(&session.id).to_string();
+        let mut items: Vec<(String, String)> = self
+            .ws
+            .list()
+            .map(|ws| (ws.id.clone(), ws.name.clone()))
+            .collect();
+        items.push((NONE.to_string(), "No workspace".to_string()));
+        let selected = items.iter().position(|(id, _)| *id == current).unwrap_or(0);
+        self.picker = Some(Picker {
+            session_id: session.id.clone(),
+            items,
+            selected,
+        });
+    }
+
+    /// Delete a workspace and its chats. Nothing is lost: they all move to
+    /// Deleted and can be restored.
+    pub(super) fn delete_workspace(&mut self, ws_id: &str) {
+        let Some(name) = self.ws.name_of(ws_id).map(str::to_string) else {
+            return;
+        };
+        let chats = self.counts.get(ws_id).copied().unwrap_or(0);
+        let was_open = self.ws.scope() == ws_id;
+        let result = self.ws.delete(ws_id);
+        if self.report(result).is_none() {
+            return;
+        }
+        self.recount();
+        self.status = format!("deleted “{name}” with {chats} chat(s); restore from Deleted");
+        if was_open {
+            self.request_search();
+        } else {
+            self.request_search_preserving_selection(false);
+        }
     }
 
     fn selected_session_key(&self) -> Option<(String, String)> {
@@ -268,6 +841,30 @@ impl AppState {
 
     pub(super) fn search_pending(&self) -> bool {
         self.search_requested || self.applied_search_generation != self.search_generation
+    }
+
+    /// A dialog is on screen. Terminal images are not drawn under it, since
+    /// their cells would show through.
+    pub(super) fn overlay_open(&self) -> bool {
+        self.show_help || self.modal.is_some() || self.picker.is_some() || self.confirm.is_some()
+    }
+
+    /// The slice of results on screen. The top only moves when the selection
+    /// leaves the window, so clicking a row does not make the list jump.
+    pub(super) fn results_window(&self, max_rows: usize) -> (usize, usize) {
+        let len = self.visible.len();
+        if len == 0 || max_rows == 0 {
+            return (0, 0);
+        }
+        let mut top = self.results_top.get();
+        if self.selected < top {
+            top = self.selected;
+        } else if self.selected >= top + max_rows {
+            top = self.selected + 1 - max_rows;
+        }
+        top = top.min(len.saturating_sub(max_rows));
+        self.results_top.set(top);
+        (top, (top + max_rows).min(len))
     }
 
     pub(super) fn selected_session(&self) -> Option<&Session> {
@@ -600,6 +1197,7 @@ pub(super) fn handle_scan_message(state: &mut AppState, message: ScanMessage) {
             total,
         } => {
             let _ = state.engine.reload();
+            state.refresh_live();
             state.scanning = false;
             state.refresh_status =
                 refresh_status("refreshed", total, new_or_modified, deleted, elapsed);

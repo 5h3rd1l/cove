@@ -11,7 +11,7 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -24,11 +24,13 @@ use crate::search::SearchEngine;
 mod images;
 mod input;
 mod layout;
+mod mouse;
 mod preview;
 mod render;
 mod state;
 mod text;
 mod theme;
+mod workspaces;
 
 use images::AgentImages;
 use input::handle_key;
@@ -110,6 +112,7 @@ fn run_loop(
 ) -> Result<TuiExit> {
     let (search_tx, search_rx) = spawn_search_worker(state.engine.clone());
     let mut needs_draw = true;
+    let mut overlay_was_open = false;
     loop {
         let mut latest_scan_message = None;
         while let Ok(message) = scan_rx.try_recv() {
@@ -144,6 +147,12 @@ fn run_loop(
         }
 
         if needs_draw {
+            // Agent logos are terminal images whose cells confuse the frame
+            // diff, so a dialog opening or closing repaints everything.
+            if state.overlay_open() != overlay_was_open {
+                overlay_was_open = state.overlay_open();
+                terminal.clear()?;
+            }
             terminal.draw(|frame| draw(frame, state))?;
             needs_draw = false;
         }
@@ -169,6 +178,7 @@ fn run_loop(
                     if handle_mouse(state, mouse, area) {
                         needs_draw = true;
                     }
+                    start_search_if_requested(state, &search_tx);
                 }
                 _ => {}
             }
@@ -228,7 +238,7 @@ fn run_search(engine: &mut SearchEngine, request: SearchRequest) -> SearchResult
             &request.query,
             request.agent_filter.as_deref(),
             request.directory_filter.as_deref(),
-            100,
+            request.limit,
         )
     })()
     .map_err(|error| format!("{error:#}"));
@@ -244,17 +254,26 @@ fn run_search(engine: &mut SearchEngine, request: SearchRequest) -> SearchResult
 const MOUSE_SCROLL_LINES: isize = 3;
 
 fn handle_mouse(state: &mut AppState, mouse: MouseEvent, area: Rect) -> bool {
-    if state.modal.is_some() {
+    if state.modal.is_some() || state.show_help {
         return false;
     }
 
     let delta = match mouse.kind {
         MouseEventKind::ScrollUp => -MOUSE_SCROLL_LINES,
         MouseEventKind::ScrollDown => MOUSE_SCROLL_LINES,
-        _ => return false,
+        _ => return mouse::handle_pointer(state, mouse, area),
     };
+    if state.picker.is_some() || state.confirm.is_some() {
+        return false;
+    }
 
-    match layout::scroll_target(area, state.show_preview, mouse.column, mouse.row) {
+    match layout::scroll_target(
+        area,
+        state.show_preview,
+        state.show_sidebar,
+        mouse.column,
+        mouse.row,
+    ) {
         Some(ScrollTarget::Results) => {
             state.move_selection(delta);
             true
@@ -297,7 +316,11 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     guard.raw_mode = true;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        SetTitle(crate::config::APP_NAME)
+    )?;
     guard.alternate_screen = true;
     execute!(stdout, EnableMouseCapture)?;
     guard.mouse_capture = true;
@@ -353,7 +376,9 @@ mod tests {
     use std::time::Duration;
 
     use chrono::{Duration as ChronoDuration, Local};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::layout::Rect;
     use tempfile::tempdir;
 
@@ -364,6 +389,7 @@ mod tests {
     use super::input::handle_key;
     use super::state::{AppState, SearchRequest};
     use super::theme::Theme;
+    use super::{layout, render};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
@@ -386,6 +412,7 @@ mod tests {
             directory_filter: None,
             preserve_selection: None,
             reload_index: false,
+            limit: 100,
         }
     }
 
@@ -472,7 +499,7 @@ mod tests {
         let path = temp.keep();
         let index = SessionIndex::open(path.join("index")).unwrap();
         index.rebuild(sessions).unwrap();
-        let state = AppState::new(
+        let mut state = AppState::new(
             String::new(),
             None,
             directory_filter,
@@ -481,6 +508,9 @@ mod tests {
             None,
             Theme::dark(),
         );
+        // The mouse tests below assume the two-pane geometry; sidebar tests
+        // turn it back on.
+        state.show_sidebar = false;
         (state, index)
     }
 
@@ -1235,5 +1265,735 @@ mod tests {
             }
             super::TuiExit::Quit => panic!("expected resume exit"),
         }
+    }
+
+    fn press(state: &mut AppState, column: u16, row: u16) {
+        let event = mouse(MouseEventKind::Down(MouseButton::Left), column, row);
+        super::handle_mouse(state, event, Rect::new(0, 0, 120, 40));
+    }
+
+    const AREA: Rect = Rect::new(0, 0, 120, 40);
+
+    /// Where a chat row is on screen (slot 0 is the first chat).
+    fn chat_point(state: &AppState, sidebar: bool, slot: u16) -> (u16, u16) {
+        let layout = layout::app(AREA, state.show_preview, sidebar);
+        let rows = render::results_rows_area(layout.main.results());
+        (rows.x + 2, rows.y + slot)
+    }
+
+    /// Where a sidebar row is on screen, found by `pick`.
+    fn sidebar_point(
+        state: &AppState,
+        pick: impl Fn(&super::state::SidebarRow) -> bool,
+    ) -> (u16, u16) {
+        let sidebar = layout::app(AREA, state.show_preview, true)
+            .sidebar
+            .expect("the sidebar fits in 120 columns");
+        let index = state
+            .sidebar_rows()
+            .iter()
+            .position(pick)
+            .expect("that row exists");
+        (sidebar.x + 3, sidebar.y + 1 + index as u16)
+    }
+
+    fn type_text(state: &mut AppState, text: &str) {
+        for ch in text.chars() {
+            handle_key(state, key(KeyCode::Char(ch), KeyModifiers::NONE)).unwrap();
+        }
+    }
+
+    #[test]
+    fn dragging_a_chat_onto_a_workspace_moves_it() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        state.show_sidebar = true;
+        let work = state.ws.add("Work").unwrap();
+        state.refresh_live();
+        let moved = state.visible[1].id.clone();
+
+        let (from_x, from_y) = chat_point(&state, true, 1);
+        let (to_x, to_y) =
+            sidebar_point(&state, |row| row.kind == super::state::RowKind::Workspace);
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+        ] {
+            let (x, y) = if matches!(kind, MouseEventKind::Down(_)) {
+                (from_x, from_y)
+            } else {
+                (to_x, to_y)
+            };
+            assert!(super::handle_mouse(&mut state, mouse(kind, x, y), AREA));
+        }
+        assert!(state.drag.as_ref().is_some_and(|drag| drag.active));
+        super::handle_mouse(
+            &mut state,
+            mouse(MouseEventKind::Up(MouseButton::Left), to_x, to_y),
+            AREA,
+        );
+
+        assert_eq!(state.ws.ws_of(&moved), work);
+        assert!(state.drag.is_none());
+        assert_eq!(state.selected, 1, "the click selected the dragged row");
+    }
+
+    #[test]
+    fn plain_click_selects_without_moving_anything() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        state.show_sidebar = true;
+        let work = state.ws.add("Work").unwrap();
+        state.refresh_live();
+        let (x, y) = chat_point(&state, true, 1);
+        press(&mut state, x, y);
+        super::handle_mouse(
+            &mut state,
+            mouse(MouseEventKind::Up(MouseButton::Left), x, y),
+            AREA,
+        );
+
+        assert_eq!(state.selected, 1);
+        assert!(state.ws.ws_of("a").is_empty() && state.ws.ws_of("b").is_empty());
+        assert!(state.ws.name_of(&work).is_some());
+    }
+
+    #[test]
+    fn double_clicking_a_title_renames_the_chat() {
+        let mut state = test_state(vec![session("a")]);
+        let layout = layout::app(Rect::new(0, 0, 120, 40), state.show_preview, false);
+        let rows_area = render::results_rows_area(layout.main.results());
+        let columns = render::result_columns(rows_area.width, state.shows_workspace_column());
+        let (x, y) = (rows_area.x + columns.title_x + 1, rows_area.y);
+
+        press(&mut state, x, y);
+        assert!(state.edit.is_none());
+        press(&mut state, x, y);
+        assert!(
+            state.edit.is_some(),
+            "second click within 400ms starts editing"
+        );
+
+        for _ in 0..40 {
+            handle_key(&mut state, key(KeyCode::Backspace, KeyModifiers::NONE)).unwrap();
+        }
+        type_text(&mut state, "My chat");
+        handle_key(&mut state, key(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
+
+        assert!(state.edit.is_none());
+        let shown = state.title_of(&state.visible[0]).to_string();
+        assert_eq!(shown, "My chat");
+        assert_eq!(
+            state.visible[0].title, "Session a",
+            "the real title is untouched"
+        );
+    }
+
+    #[test]
+    fn renaming_back_to_the_original_or_empty_clears_the_custom_name() {
+        let mut state = test_state(vec![session("a")]);
+        state.ws.rename_chat("a", "Custom").unwrap();
+        handle_key(&mut state, key(KeyCode::F(2), KeyModifiers::NONE)).unwrap();
+        for _ in 0..40 {
+            handle_key(&mut state, key(KeyCode::Backspace, KeyModifiers::NONE)).unwrap();
+        }
+        handle_key(&mut state, key(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
+        assert_eq!(state.title_of(&state.visible[0]), "Session a");
+    }
+
+    #[test]
+    fn escape_cancels_a_rename() {
+        let mut state = test_state(vec![session("a")]);
+        handle_key(&mut state, key(KeyCode::F(2), KeyModifiers::NONE)).unwrap();
+        type_text(&mut state, "zzz");
+        handle_key(&mut state, key(KeyCode::Esc, KeyModifiers::NONE)).unwrap();
+        assert!(state.edit.is_none());
+        assert_eq!(state.title_of(&state.visible[0]), "Session a");
+    }
+
+    #[test]
+    fn workspace_scope_filters_results() {
+        let mut state = test_state(vec![session("a"), session("b"), session("c")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.move_session_to("c", &work);
+
+        state.set_scope(&work);
+        state.refresh_search();
+        let mut ids: Vec<_> = state.visible.iter().map(|s| s.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "c"]);
+
+        state.set_scope(super::workspaces::NONE);
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 1);
+        assert_eq!(state.visible[0].id, "b");
+
+        state.set_scope(super::workspaces::ALL);
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 3);
+    }
+
+    #[test]
+    fn picker_moves_the_selected_chat() {
+        let mut state = test_state(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        handle_key(&mut state, key(KeyCode::F(3), KeyModifiers::NONE)).unwrap();
+        assert!(state.picker.is_some());
+        // It opens on the chat's current place ("No workspace", the last item).
+        handle_key(&mut state, key(KeyCode::Up, KeyModifiers::NONE)).unwrap();
+        handle_key(&mut state, key(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
+        assert!(state.picker.is_none());
+        assert_eq!(state.ws.ws_of("a"), work);
+    }
+
+    #[test]
+    fn new_workspace_is_named_inline_and_alt_arrows_switch() {
+        let mut state = test_state(vec![session("a")]);
+        handle_key(&mut state, key(KeyCode::F(4), KeyModifiers::NONE)).unwrap();
+        assert!(matches!(
+            state.edit.as_ref().map(|edit| &edit.target),
+            Some(super::state::EditTarget::Workspace(_))
+        ));
+        type_text(&mut state, "Optruss");
+        handle_key(&mut state, key(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
+        let id = state.ws.scope().to_string();
+        assert_eq!(state.ws.name_of(&id), Some("Optruss"));
+
+        handle_key(&mut state, key(KeyCode::Up, KeyModifiers::ALT)).unwrap();
+        assert_eq!(state.ws.scope(), super::workspaces::ALL);
+        handle_key(&mut state, key(KeyCode::Down, KeyModifiers::ALT)).unwrap();
+        assert_eq!(state.ws.scope(), id);
+    }
+
+    #[test]
+    fn deleting_a_chat_moves_it_to_deleted_and_restore_brings_it_back() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.set_scope(&work);
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 1);
+
+        handle_key(&mut state, key(KeyCode::F(8), KeyModifiers::NONE)).unwrap();
+        state.refresh_search();
+        assert!(state.visible.is_empty(), "gone from its workspace");
+        state.set_scope(super::workspaces::ALL);
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 1, "and from All; only b is left");
+        assert_eq!(state.visible[0].id, "b");
+
+        state.set_scope(super::workspaces::TRASH);
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 1);
+        assert_eq!(state.visible[0].id, "a");
+
+        handle_key(&mut state, key(KeyCode::F(8), KeyModifiers::NONE)).unwrap();
+        state.refresh_search();
+        assert!(state.visible.is_empty(), "restored chats leave Deleted");
+        state.set_scope(&work);
+        state.refresh_search();
+        assert_eq!(state.visible[0].id, "a", "back in its workspace");
+    }
+
+    #[test]
+    fn deleting_a_workspace_moves_its_chats_to_deleted_and_it_can_be_restored() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+
+        state.delete_workspace(&work);
+        assert!(state.ws.name_of(&work).is_none());
+        state.set_scope(super::workspaces::TRASH);
+        state.refresh_search();
+        assert_eq!(state.visible[0].id, "a");
+        let rows = state.sidebar_rows();
+        let deleted_ws = rows
+            .iter()
+            .find(|row| row.kind == super::state::RowKind::DeletedWorkspace)
+            .expect("deleted workspaces are listed under Deleted");
+        assert_eq!((deleted_ws.name.as_str(), deleted_ws.count), ("Work", 1));
+
+        state.restore_selected_workspace();
+        assert_eq!(state.ws.name_of(&work), Some("Work"));
+        state.set_scope(&work);
+        state.refresh_search();
+        assert_eq!(state.visible[0].id, "a");
+    }
+
+    #[test]
+    fn dragging_onto_deleted_deletes_and_dragging_out_restores() {
+        use super::state::RowKind;
+        let mut state = test_state(vec![session("a")]);
+        state.show_sidebar = true;
+        let work = state.ws.add("Work").unwrap();
+        state.refresh_live();
+
+        let drag_to = |state: &mut AppState, from: (u16, u16), to: (u16, u16)| {
+            for (kind, at) in [
+                (MouseEventKind::Down(MouseButton::Left), from),
+                (MouseEventKind::Drag(MouseButton::Left), to),
+                (MouseEventKind::Up(MouseButton::Left), to),
+            ] {
+                super::handle_mouse(state, mouse(kind, at.0, at.1), AREA);
+            }
+        };
+
+        let from = chat_point(&state, true, 0);
+        let deleted = sidebar_point(&state, |row| row.kind == RowKind::Deleted);
+        drag_to(&mut state, from, deleted);
+        assert!(state.ws.is_trashed("a"));
+
+        // In the Deleted view, dropping on a workspace restores into it.
+        state.set_scope(super::workspaces::TRASH);
+        state.refresh_search();
+        // One column over: the same cell twice in a row would be a double-click.
+        let from = chat_point(&state, true, 0);
+        let from = (from.0 + 1, from.1);
+        let target = sidebar_point(&state, |row| row.kind == RowKind::Workspace);
+        drag_to(&mut state, from, target);
+        assert!(!state.ws.is_trashed("a"));
+        assert_eq!(state.ws.ws_of("a"), work);
+    }
+
+    #[test]
+    fn clicking_the_row_glyph_deletes_only_on_the_selected_row() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        let layout = layout::app(AREA, state.show_preview, false);
+        let rows_area = render::results_rows_area(layout.main.results());
+        let glyph_x = rows_area.right() - 1;
+        let y = rows_area.y + 1; // the second chat
+
+        // Row 1 is not selected yet: the first click only selects it.
+        press(&mut state, glyph_x, y);
+        assert!(!state.ws.is_trashed("a") && !state.ws.is_trashed("b"));
+        assert_eq!(state.selected, 1);
+
+        let doomed = state.visible[1].id.clone();
+        press(&mut state, glyph_x, y);
+        assert!(state.ws.is_trashed(&doomed));
+    }
+
+    #[test]
+    fn results_window_does_not_jump_when_clicking_a_visible_row() {
+        let mut state = test_state((0..30).map(|i| session(&format!("s{i:02}"))).collect());
+        state.selected = 25;
+        let (top, _) = state.results_window(10);
+        assert_eq!(top, 16);
+        state.selected = 20;
+        assert_eq!(state.results_window(10).0, 16, "still inside the window");
+        state.selected = 5;
+        assert_eq!(state.results_window(10).0, 5);
+    }
+
+    fn press_key(state: &mut AppState, code: KeyCode) -> Option<super::TuiExit> {
+        handle_key(state, key(code, KeyModifiers::NONE)).unwrap()
+    }
+
+    fn with_sidebar(sessions: Vec<Session>) -> AppState {
+        let mut state = test_state(sessions);
+        state.show_sidebar = true;
+        state.note_sidebar_on_screen(true); // drawing does this in the app
+        state
+    }
+
+    #[test]
+    fn arrows_move_between_the_chat_list_and_the_workspace_list() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        state.refresh_live();
+        assert_eq!(
+            state.focus,
+            Focus::Chats,
+            "the list has the keyboard at start"
+        );
+
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.focus, Focus::Sidebar);
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(
+            state.ws.scope(),
+            work,
+            "moving in the list opens that workspace"
+        );
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(state.ws.scope(), super::workspaces::NONE);
+        press_key(&mut state, KeyCode::Up);
+        press_key(&mut state, KeyCode::Up);
+        assert_eq!(state.ws.scope(), super::workspaces::ALL);
+        press_key(&mut state, KeyCode::Up);
+        assert_eq!(
+            state.ws.scope(),
+            super::workspaces::ALL,
+            "no wrap at the top"
+        );
+
+        press_key(&mut state, KeyCode::Right);
+        assert_eq!(state.focus, Focus::Chats);
+        press_key(&mut state, KeyCode::Left);
+        press_key(&mut state, KeyCode::Enter);
+        assert_eq!(
+            state.focus,
+            Focus::Chats,
+            "Enter also goes back to the chats"
+        );
+    }
+
+    #[test]
+    fn slash_jumps_to_search_and_typing_anywhere_still_searches() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+
+        type_text(&mut state, "/");
+        assert_eq!(state.focus, Focus::Search);
+        assert!(state.query.is_empty(), "the slash is a command, not text");
+
+        // A slash typed in the search box is ordinary text (paths).
+        type_text(&mut state, "/tmp");
+        assert_eq!(state.query, "/tmp");
+
+        press_key(&mut state, KeyCode::Esc);
+        assert_eq!(state.focus, Focus::Chats, "Esc leaves the search box");
+        state.query.clear();
+        state.cursor = 0;
+
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.focus, Focus::Sidebar);
+        type_text(&mut state, "x");
+        assert_eq!(
+            state.focus,
+            Focus::Search,
+            "typing in the workspace list searches"
+        );
+        assert_eq!(state.query, "x");
+    }
+
+    #[test]
+    fn escape_quits_only_from_the_lists() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+        state.focus = Focus::Search;
+        assert!(press_key(&mut state, KeyCode::Esc).is_none());
+        assert!(matches!(
+            press_key(&mut state, KeyCode::Esc),
+            Some(super::TuiExit::Quit)
+        ));
+    }
+
+    #[test]
+    fn search_keeps_its_cursor_keys() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+        state.focus = Focus::Search;
+        type_text(&mut state, "abc");
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.focus, Focus::Search, "Left edits the query here");
+        assert_eq!(state.cursor, 2);
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(state.focus, Focus::Chats, "Down goes to the results");
+    }
+
+    #[test]
+    fn left_says_so_when_the_workspace_list_is_hidden() {
+        use super::state::Focus;
+        let mut state = test_state(vec![session("a")]);
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.focus, Focus::Chats);
+        assert!(state.status.contains("hidden"));
+    }
+
+    #[test]
+    fn delete_and_f2_act_on_the_focused_pane() {
+        use super::state::{EditTarget, Focus};
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+
+        // In the chat list Delete removes the chat...
+        press_key(&mut state, KeyCode::Delete);
+        assert!(state.ws.is_trashed("a"));
+        state.ws.restore_chat("a").unwrap();
+        state.refresh_search();
+
+        // ...in the workspace list, F2 renames the workspace, Delete removes it.
+        state.set_scope(&work);
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.focus, Focus::Sidebar);
+        press_key(&mut state, KeyCode::F(2));
+        assert!(matches!(
+            state.edit.as_ref().map(|e| &e.target),
+            Some(EditTarget::Workspace(id)) if *id == work
+        ));
+        press_key(&mut state, KeyCode::Esc);
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::Delete);
+        assert!(state.ws.name_of(&work).is_none(), "workspace deleted");
+    }
+
+    #[test]
+    fn a_deleted_workspace_can_be_opened_without_being_restored() {
+        let mut state = with_sidebar(vec![session("a"), session("b")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.delete_workspace(&work);
+        state.set_scope(super::workspaces::TRASH);
+        state.refresh_search();
+
+        let sidebar = layout::app(AREA, state.show_preview, true).sidebar.unwrap();
+        let (row_x, y) = sidebar_point(&state, |row| {
+            row.kind == super::state::RowKind::DeletedWorkspace
+        });
+
+        // Clicking the row opens it and lists its chats; nothing is restored.
+        press(&mut state, row_x, y);
+        assert_eq!(state.ws.scope(), work);
+        assert!(state.ws.name_of(&work).is_none(), "still deleted");
+        assert_eq!(state.visible.len(), 1);
+        assert_eq!(state.visible[0].id, "a");
+        assert!(state.in_deleted_view());
+        assert_eq!(state.ws.scope_label(&work), "Work (deleted)");
+
+        // The keyboard reaches it too, and the ↺ on the row restores it.
+        press(&mut state, sidebar.right() - 4, y);
+        assert_eq!(state.ws.name_of(&work), Some("Work"), "restored on purpose");
+        assert!(!state.ws.is_trashed("a"));
+    }
+
+    #[test]
+    fn alt_u_restores_the_open_deleted_workspace_and_arrows_reach_it() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.delete_workspace(&work);
+        state.set_scope(super::workspaces::TRASH);
+
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(
+            state.ws.scope(),
+            work,
+            "the deleted workspace is the next row"
+        );
+
+        handle_key(&mut state, key(KeyCode::Char('u'), KeyModifiers::ALT)).unwrap();
+        assert_eq!(state.ws.name_of(&work), Some("Work"));
+    }
+
+    fn open_deleted_view(state: &mut AppState) {
+        state.set_scope(super::workspaces::TRASH);
+        state.refresh_search();
+    }
+
+    #[test]
+    fn f9_asks_first_and_only_y_erases_a_deleted_chat() {
+        let mut state = test_state(vec![session("a"), session("b")]);
+        // Not deleted yet: nothing to confirm.
+        press_key(&mut state, KeyCode::F(9));
+        assert!(state.confirm.is_none());
+        assert!(state.status.contains("delete it first"));
+
+        state.move_session_to("a", super::workspaces::TRASH);
+        open_deleted_view(&mut state);
+        press_key(&mut state, KeyCode::F(9));
+        assert!(state.confirm.is_some());
+
+        // Enter, Esc and n all cancel.
+        for code in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n')] {
+            press_key(&mut state, KeyCode::F(9));
+            press_key(&mut state, code);
+            assert!(state.confirm.is_none());
+            assert!(state.ws.is_trashed("a") && !state.ws.is_purged("a"));
+        }
+
+        press_key(&mut state, KeyCode::F(9));
+        press_key(&mut state, KeyCode::Char('y'));
+        assert!(state.ws.is_purged("a"));
+        assert!(!state.ws.is_trashed("a"));
+        state.refresh_search();
+        assert!(state.visible.is_empty(), "gone from Deleted");
+        state.set_scope(super::workspaces::ALL);
+        state.refresh_search();
+        let ids: Vec<_> = state.visible.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["b"], "and from All");
+    }
+
+    #[test]
+    fn a_workspace_is_erased_with_its_chats_from_the_workspace_list() {
+        use super::state::{ConfirmAction, Focus};
+        let mut state = with_sidebar(vec![session("a"), session("b"), session("c")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.move_session_to("b", &work);
+        state.delete_workspace(&work);
+        state.set_scope(&work);
+
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::F(9));
+        assert_eq!(
+            state.confirm,
+            Some(ConfirmAction::PurgeWorkspace {
+                id: work.clone(),
+                name: "Work".into(),
+                chats: 2
+            })
+        );
+        press_key(&mut state, KeyCode::Char('y'));
+
+        assert!(state.ws.is_purged("a") && state.ws.is_purged("b"));
+        assert!(!state.ws.is_purged("c"));
+        assert!(state.ws.deleted_name_of(&work).is_none());
+        assert_eq!(state.ws.scope(), super::workspaces::ALL);
+        assert!(
+            state
+                .sidebar_rows()
+                .iter()
+                .all(|row| row.kind != super::state::RowKind::DeletedWorkspace),
+        );
+        state.refresh_search();
+        assert_eq!(state.visible.len(), 1);
+        assert_eq!(state.visible[0].id, "c");
+    }
+
+    #[test]
+    fn f9_on_a_live_workspace_says_what_to_do() {
+        use super::state::Focus;
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        state.set_scope(&work);
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::F(9));
+        assert!(state.confirm.is_none());
+        assert!(state.status.contains("deleted workspace"));
+    }
+
+    #[test]
+    fn the_red_x_on_a_deleted_chat_row_opens_the_dialog_and_only_its_button_erases() {
+        let mut state = test_state(vec![session("a")]);
+        state.move_session_to("a", super::workspaces::TRASH);
+        open_deleted_view(&mut state);
+        let area = Rect::new(0, 0, 120, 40);
+        let layout = layout::app(area, state.show_preview, false);
+        let rows_area = render::results_rows_area(layout.main.results());
+        let y = rows_area.y;
+
+        // The row must be selected before its glyphs react.
+        press(&mut state, rows_area.x + 3, y);
+        assert!(state.confirm.is_none());
+        press(&mut state, rows_area.right() - 1, y);
+        assert!(state.confirm.is_some());
+
+        // A click away from the red button cancels.
+        press(&mut state, 1, 1);
+        assert!(state.confirm.is_none() && !state.ws.is_purged("a"));
+
+        press(&mut state, rows_area.right() - 1, y);
+        let (_, _, erase) = render::confirm_buttons(area);
+        press(&mut state, erase.x + 2, erase.y);
+        assert!(state.ws.is_purged("a"));
+    }
+
+    #[test]
+    fn the_restore_arrow_on_a_deleted_chat_row_still_restores() {
+        let mut state = test_state(vec![session("a")]);
+        state.move_session_to("a", super::workspaces::TRASH);
+        open_deleted_view(&mut state);
+        let layout = layout::app(Rect::new(0, 0, 120, 40), state.show_preview, false);
+        let rows_area = render::results_rows_area(layout.main.results());
+
+        press(&mut state, rows_area.x + 3, rows_area.y);
+        press(&mut state, rows_area.right() - 4, rows_area.y);
+        assert!(!state.ws.is_trashed("a"));
+        assert!(!state.ws.is_purged("a"));
+    }
+
+    #[test]
+    fn the_red_x_on_a_deleted_workspace_row_asks_to_erase_it() {
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        state.move_session_to("a", &work);
+        state.delete_workspace(&work);
+        state.set_scope(&work); // open it, as a click on its row does
+
+        let sidebar = layout::app(AREA, state.show_preview, true).sidebar.unwrap();
+        let (row_x, y) = sidebar_point(&state, |row| {
+            row.kind == super::state::RowKind::DeletedWorkspace
+        });
+
+        let _ = row_x;
+        press(&mut state, sidebar.right() - 2, y);
+        assert!(matches!(
+            state.confirm,
+            Some(super::state::ConfirmAction::PurgeWorkspace { .. })
+        ));
+        assert!(
+            state.ws.deleted_name_of(&work).is_some(),
+            "nothing erased yet"
+        );
+    }
+
+    #[test]
+    fn the_delete_key_erases_in_deleted_but_f8_still_restores() {
+        use super::state::ConfirmAction;
+        let mut state = test_state(vec![session("a"), session("b")]);
+        state.move_session_to("a", super::workspaces::TRASH);
+        state.move_session_to("b", super::workspaces::TRASH);
+        open_deleted_view(&mut state);
+        assert_eq!(state.visible.len(), 2);
+
+        // Delete asks to erase the selected chat, and does nothing until y.
+        press_key(&mut state, KeyCode::Delete);
+        assert!(matches!(
+            state.confirm,
+            Some(ConfirmAction::PurgeChat { .. })
+        ));
+        assert!(state.ws.is_trashed("a") && state.ws.is_trashed("b"));
+        press_key(&mut state, KeyCode::Esc);
+        assert!(state.confirm.is_none());
+        assert!(!state.ws.is_purged("a") && state.ws.is_trashed("a"));
+
+        // F8 restores, exactly as before.
+        let first = state.visible[0].id.clone();
+        press_key(&mut state, KeyCode::F(8));
+        assert!(!state.ws.is_trashed(&first), "F8 restored it");
+        assert!(!state.ws.is_purged(&first));
+
+        // y after Delete erases the remaining one.
+        state.refresh_search();
+        let second = state.visible[0].id.clone();
+        press_key(&mut state, KeyCode::Delete);
+        press_key(&mut state, KeyCode::Char('y'));
+        assert!(state.ws.is_purged(&second));
+    }
+
+    #[test]
+    fn the_delete_key_in_the_workspace_list_erases_a_deleted_workspace_but_deletes_a_live_one() {
+        use super::state::{ConfirmAction, Focus};
+        let mut state = with_sidebar(vec![session("a")]);
+        let work = state.ws.add("Work").unwrap();
+        let play = state.ws.add("Play").unwrap();
+        state.move_session_to("a", &work);
+
+        // Live workspace: Delete moves it to Deleted (no dialog, recoverable).
+        state.set_scope(&play);
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::Delete);
+        assert!(state.confirm.is_none());
+        assert!(state.ws.deleted_name_of(&play).is_some());
+
+        // Deleted workspace: Delete now asks to erase it for good.
+        state.delete_workspace(&work);
+        state.set_scope(&work);
+        state.focus = Focus::Sidebar;
+        press_key(&mut state, KeyCode::Delete);
+        assert!(matches!(
+            state.confirm,
+            Some(ConfirmAction::PurgeWorkspace { .. })
+        ));
+        press_key(&mut state, KeyCode::Char('n'));
+        assert!(state.ws.deleted_name_of(&work).is_some(), "n keeps it");
+
+        // F8 in the list still restores it.
+        press_key(&mut state, KeyCode::F(8));
+        assert_eq!(state.ws.name_of(&work), Some("Work"));
     }
 }

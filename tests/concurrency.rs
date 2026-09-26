@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn run_fr(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_fr"))
+    Command::new(env!("CARGO_BIN_EXE_cove"))
         .args(args)
         .env_clear()
         .env("HOME", home)
@@ -60,7 +60,7 @@ fn parallel_list_calls_serialize_refreshes() {
         "Concurrent index writer coverage",
     );
 
-    let cache_dir = temp.path().join(".cache/fast-resume");
+    let cache_dir = temp.path().join(".cache/cove");
     fs::create_dir_all(&cache_dir).unwrap();
     let lock_path = cache_dir.join("tantivy_index.write.lock");
     let lock_file = OpenOptions::new()
@@ -74,7 +74,7 @@ fn parallel_list_calls_serialize_refreshes() {
 
     let mut children: Vec<_> = (0..8)
         .map(|_| {
-            Command::new(env!("CARGO_BIN_EXE_fr"))
+            Command::new(env!("CARGO_BIN_EXE_cove"))
                 .arg("--list")
                 .arg("Concurrent index writer")
                 .env_clear()
@@ -102,7 +102,7 @@ fn parallel_list_calls_serialize_refreshes() {
         let (stdout, stderr) = assert_success(output);
         for line in stderr.lines() {
             assert!(
-                line.contains("Waiting for another fr process"),
+                line.contains("Waiting for another cove process"),
                 "unexpected stderr line: {line}"
             );
         }
@@ -117,7 +117,7 @@ fn stale_schema_wipe_waits_for_the_write_lock() {
     write_codex_session(temp.path(), "schema123", "/repo/parallel", "Schema wipe");
     assert_success(run_fr(temp.path(), &["--list"]));
 
-    let cache_dir = temp.path().join(".cache/fast-resume");
+    let cache_dir = temp.path().join(".cache/cove");
     let index_dir = cache_dir.join("tantivy_index");
     fs::write(index_dir.join(".schema_version"), "0").unwrap();
 
@@ -130,7 +130,7 @@ fn stale_schema_wipe_waits_for_the_write_lock() {
         .unwrap();
     lock_file.lock_exclusive().unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cove"))
         .arg("--list")
         .env_clear()
         .env("HOME", temp.path())
@@ -169,9 +169,7 @@ fn list_waits_for_the_refresh_lock_and_returns_fresh_data() {
         "/repo/parallel",
         "Pending session",
     );
-    let lock_path = temp
-        .path()
-        .join(".cache/fast-resume/tantivy_index.write.lock");
+    let lock_path = temp.path().join(".cache/cove/tantivy_index.write.lock");
     let lock_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -181,7 +179,7 @@ fn list_waits_for_the_refresh_lock_and_returns_fresh_data() {
         .unwrap();
     lock_file.lock_exclusive().unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cove"))
         .arg("--list")
         .env_clear()
         .env("HOME", temp.path())
@@ -195,7 +193,7 @@ fn list_waits_for_the_refresh_lock_and_returns_fresh_data() {
     FileExt::unlock(&lock_file).unwrap();
     let output = child.wait_with_output().unwrap();
     let (stdout, stderr) = assert_success(output);
-    assert!(stderr.contains("Waiting for another fr process"));
+    assert!(stderr.contains("Waiting for another cove process"));
     assert!(stderr.contains("--no-refresh"));
     assert!(stdout.contains("committed123"));
     assert!(stdout.contains("pending123"));
@@ -218,9 +216,7 @@ fn no_refresh_serves_the_current_index_while_the_lock_is_held() {
         "/repo/parallel",
         "Pending session",
     );
-    let lock_path = temp
-        .path()
-        .join(".cache/fast-resume/tantivy_index.write.lock");
+    let lock_path = temp.path().join(".cache/cove/tantivy_index.write.lock");
     let lock_file = OpenOptions::new()
         .read(true)
         .write(true)

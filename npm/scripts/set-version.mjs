@@ -11,12 +11,11 @@ if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 
 const npmRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(npmRoot, "..");
-const launcherPath = path.join(npmRoot, "fast-resume", "package.json");
+const launcherPath = path.join(npmRoot, "cove-cli", "package.json");
 const platformsRoot = path.join(npmRoot, "platforms");
 
-// The first top-level `version = "..."` line is the package version in both
-// Cargo.toml ([package]) and pyproject.toml ([project]); dependency versions
-// only appear in inline tables.
+// The first top-level `version = "..."` line is the package version in
+// Cargo.toml ([package]); dependency versions only appear in inline tables.
 function setTomlVersion(file) {
   const source = fs.readFileSync(file, "utf8");
   if (!/^version = ".*"$/m.test(source)) {
@@ -29,7 +28,6 @@ function setTomlVersion(file) {
 }
 
 setTomlVersion(path.join(repoRoot, "Cargo.toml"));
-setTomlVersion(path.join(repoRoot, "pyproject.toml"));
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -45,7 +43,7 @@ const platformPackages = fs
   .map((entry) => ({
     alias: entry.name,
     file: path.join(platformsRoot, entry.name, "package.json"),
-    variant: entry.name.replace(/^fast-resume-/, ""),
+    variant: entry.name.replace(/^cove-cli-/, ""),
   }))
   .sort((left, right) => left.alias.localeCompare(right.alias));
 
@@ -59,13 +57,13 @@ if (JSON.stringify(platformAliases) !== JSON.stringify(dependencyNames)) {
 
 launcher.version = version;
 for (const { alias, variant } of platformPackages) {
-  launcher.optionalDependencies[alias] = `npm:fast-resume@${version}-${variant}`;
+  launcher.optionalDependencies[alias] = `npm:cove-cli@${version}-${variant}`;
 }
 writeJson(launcherPath, launcher);
 
 for (const { file, variant } of platformPackages) {
   const metadata = readJson(file);
-  metadata.name = "fast-resume";
+  metadata.name = "cove-cli";
   metadata.version = `${version}-${variant}`;
   writeJson(file, metadata);
 }

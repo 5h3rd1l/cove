@@ -8,7 +8,7 @@ function main() {
   try {
     binary = resolveBinary();
   } catch (error) {
-    console.error(`fast-resume: ${error.message}`);
+    console.error(`cove: ${error.message}`);
     process.exitCode = 1;
     return;
   }
@@ -16,7 +16,7 @@ function main() {
   const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
 
   child.once("error", (error) => {
-    console.error(`fast-resume: failed to start native binary: ${error.message}`);
+    console.error(`cove: failed to start native binary: ${error.message}`);
     process.exitCode = 1;
   });
 
