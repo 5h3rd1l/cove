@@ -34,3 +34,4 @@ __pycache__/
 /scripts/screenshots/demo-run.json
 /scripts/screenshots/demo-cap.txt
 /scripts/screenshots/*.html
+/release-artifacts/
