@@ -11,6 +11,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 dir=${1:?usage: npm/scripts/publish.sh <directory with the downloaded artifacts>}
+# Absolute path: npm reads "some/dir/x.tgz" as a GitHub user/repo shorthand.
+dir=$(cd "$dir" && pwd)
 version=$(node -p "require('./npm/cove-cli/package.json').version")
 variants=(linux-x64 linux-arm64 darwin-arm64 darwin-x64)
 flags=(--access public)
