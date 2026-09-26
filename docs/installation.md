@@ -6,7 +6,7 @@
 npm install --global cove-cli
 ```
 
-Installs the `cove` and `cv` commands with the native binary for your machine. Currently published for Linux x64; macOS and Linux arm64 builds are on the way.
+Installs the `cove` and `cv` commands with the native binary for your machine: macOS (Apple Silicon and Intel) and Linux (x64 and arm64, glibc 2.34 or newer).
 
 ## From source
 

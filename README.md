@@ -85,9 +85,9 @@ npm install --global cove-cli
 
 That is all: npm picks the right native binary for your machine. It installs two commands, `cove` and `cv`.
 
-> **Platforms:** Linux x64 today. macOS and Linux arm64 builds are on the way; until they are published, use the source install below.
+> **Platforms:** macOS (Apple Silicon and Intel) and Linux (x64 and arm64). Windows is not supported yet ([#6](https://github.com/5h3rd1l/cove/issues/6)).
 
-**From source** (any platform, needs Rust 1.88 or newer):
+**From source** (needs Rust 1.88 or newer):
 
 ```bash
 git clone https://github.com/5h3rd1l/cove.git && cd cove
