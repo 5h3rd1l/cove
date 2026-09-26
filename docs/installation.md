@@ -1,5 +1,15 @@
 # Installation
 
+## With npm (one command)
+
+```bash
+npm install --global cove-cli
+```
+
+Installs the `cove` and `cv` commands with the native binary for your machine. Currently published for Linux x64; macOS and Linux arm64 builds are on the way.
+
+## From source
+
 Cove is a single Rust binary.
 
 ```bash

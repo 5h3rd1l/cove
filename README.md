@@ -2,6 +2,16 @@
 
 **Your coding-agent chats, in order.**
 
+[![npm](https://img.shields.io/npm/v/cove-cli?label=npm&color=8cbeff)](https://www.npmjs.com/package/cove-cli)
+[![CI](https://github.com/5h3rd1l/cove/actions/workflows/ci.yml/badge.svg)](https://github.com/5h3rd1l/cove/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+
+```bash
+npm install --global cove-cli
+```
+
+Then run `cove` (or the short form, `cv`).
+
 Cove is a terminal app for everyone who talks to coding agents all day. It finds every chat you have had with Claude Code, Codex, opencode and friends, lets you **group them into workspaces**, **rename them**, and jump straight back into any of them.
 
 ```
@@ -42,13 +52,23 @@ Cove only *reads* your agents' history. Workspaces, names and the trash live in 
 ## Install
 
 ```bash
+npm install --global cove-cli
+```
+
+That is all: npm picks the right native binary for your machine. It installs two commands, `cove` and `cv`.
+
+> **Platforms:** Linux x64 today. macOS and Linux arm64 builds are on the way; until they are published, use the source install below.
+
+**From source** (any platform, needs Rust 1.88 or newer):
+
+```bash
 git clone https://github.com/5h3rd1l/cove.git && cd cove
 cargo build --release
 ln -sf "$PWD/target/release/cove" ~/.local/bin/cove
 ln -sf "$PWD/target/release/cove" ~/.local/bin/cv    # optional short form
 ```
 
-Needs Rust 1.88 or newer. The first run builds a search index in `~/.cache/cove`.
+The first run builds a search index in `~/.cache/cove`.
 
 ## Coming from `frw`?
 
