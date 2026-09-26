@@ -1,8 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -402,13 +401,26 @@ fn lists_antigravity_cursor_and_grok_sessions() {
 #[test]
 fn json_output_is_stable_and_paginated() {
     let temp = TempDir::new().unwrap();
-    for (id, prompt) in [
+    // Recency nudges the score of a match only slightly. Sessions written a few
+    // milliseconds apart tie, and tied results can come back in a different
+    // order in the second process, so page 2 would repeat or skip a result.
+    // Timestamps an hour apart make the ranking decisive.
+    let base = SystemTime::now() - Duration::from_secs(10 * 3600);
+    for (index, (id, prompt)) in [
         ("json-a", "JSON pagination alpha"),
         ("json-b", "JSON pagination beta"),
         ("json-c", "JSON pagination gamma"),
-    ] {
-        write_codex_session(temp.path(), id, "/repo/json", prompt);
-        thread::sleep(Duration::from_millis(10));
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = write_codex_session(temp.path(), id, "/repo/json", prompt);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(base + Duration::from_secs(3600 * index as u64))
+            .unwrap();
     }
 
     let (first_stdout, first_stderr) = assert_success(run_fr(
