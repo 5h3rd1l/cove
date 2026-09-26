@@ -1,8 +1,14 @@
 {
   "name": "cove-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cove: your coding-agent chats, organized into workspaces",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/5h3rd1l/cove.git"
+  },
+  "homepage": "https://github.com/5h3rd1l/cove#readme",
+  "bugs": "https://github.com/5h3rd1l/cove/issues",
   "keywords": [
     "cli",
     "coding-agents",
@@ -29,10 +35,10 @@
     "test": "node --test"
   },
   "optionalDependencies": {
-    "cove-cli-darwin-arm64": "npm:cove-cli@0.1.0-darwin-arm64",
-    "cove-cli-darwin-x64": "npm:cove-cli@0.1.0-darwin-x64",
-    "cove-cli-linux-arm64": "npm:cove-cli@0.1.0-linux-arm64",
-    "cove-cli-linux-x64": "npm:cove-cli@0.1.0-linux-x64"
+    "cove-cli-darwin-arm64": "npm:cove-cli@0.1.1-darwin-arm64",
+    "cove-cli-darwin-x64": "npm:cove-cli@0.1.1-darwin-x64",
+    "cove-cli-linux-arm64": "npm:cove-cli@0.1.1-linux-arm64",
+    "cove-cli-linux-x64": "npm:cove-cli@0.1.1-linux-x64"
   },
   "publishConfig": {
     "access": "public"

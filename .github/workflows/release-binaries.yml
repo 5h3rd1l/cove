@@ -1,0 +1,80 @@
+name: Release binaries
+
+# Builds the native binary for every supported platform and packs each one as
+# an npm platform package (an artifact of the run). Nothing is published from
+# here: download the artifacts and publish them with npm/scripts/publish.sh.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.variant }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The Linux builds use the oldest runners so the binaries run on
+          # older distributions (glibc 2.35+, e.g. Ubuntu 22.04, Debian 12).
+          - variant: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - variant: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - variant: darwin-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          # Cross-compiled on the Apple Silicon runner.
+          - variant: darwin-x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-${{ matrix.target }}-
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Smoke test
+        # The Intel Mac binary is cross-compiled and cannot run on this runner.
+        if: matrix.variant != 'darwin-x64'
+        run: |
+          ./target/${{ matrix.target }}/release/cove --version
+          ./target/${{ matrix.target }}/release/cove --help | head -3
+      - name: Show what was built
+        run: |
+          file target/${{ matrix.target }}/release/cove
+          ls -la target/${{ matrix.target }}/release/cove
+      - name: Pack the npm platform package
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          node npm/scripts/set-version.mjs "$VERSION"
+          PKG=npm/platforms/cove-cli-${{ matrix.variant }}
+          mkdir -p "$PKG/bin" dist
+          cp target/${{ matrix.target }}/release/cove "$PKG/bin/cove"
+          chmod +x "$PKG/bin/cove"
+          npm pack "./$PKG" --pack-destination dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: cove-cli-${{ matrix.variant }}
+          path: dist/*.tgz
+          if-no-files-found: error
