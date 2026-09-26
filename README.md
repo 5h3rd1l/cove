@@ -14,6 +14,8 @@ Then run `cove` (or the short form, `cv`).
 
 Cove is a terminal app for everyone who talks to coding agents all day. It finds every chat you have had with Claude Code, Codex, opencode and friends, lets you **group them into workspaces**, **rename them**, and jump straight back into any of them.
 
+![Cove showing chats grouped into workspaces, with a live preview](assets/screenshots/overview.png)
+
 ```
 cove                 open the app
 cove "auth bug"      open it with a search already typed
@@ -30,6 +32,30 @@ cove --list          print your chats instead of opening the app
 - **A safe trash.** Delete a chat or a whole workspace and it lands in **Deleted**, where you can browse it and restore it. Erasing for good is a separate, confirmed step.
 - **Keyboard or mouse.** `←` `→` move between the workspace list and your chats, `/` jumps to search, and typing anywhere searches.
 - **Resume in one key.** `Enter` reopens the chat in its agent, in its folder.
+
+## Screenshots
+
+*All screenshots use invented demo chats.*
+
+**Drag a chat onto a workspace** (or press `F3`). Names you choose, like "Cart rounding bug", replace the agent's title.
+
+![Dragging a chat onto a workspace](assets/screenshots/dragging.png)
+
+**Open a workspace** to see just its chats, each project in its own color.
+
+![Inside the Storefront workspace](assets/screenshots/workspace.png)
+
+**Deleted things are recoverable.** Open a deleted workspace to look inside without restoring it; `F8` restores, `Delete` erases for good after a confirmation.
+
+![The Deleted view showing a deleted workspace](assets/screenshots/deleted.png)
+
+**Everything is on `F1`.**
+
+![The keyboard shortcuts dialog](assets/screenshots/help.png)
+
+**Light theme** (`cove --theme light`, or automatic from your terminal).
+
+![Cove in the light theme](assets/screenshots/overview-light.png)
 
 ## Your chats are never touched
 
