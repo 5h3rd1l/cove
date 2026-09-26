@@ -10,3 +10,5 @@ THEME=light scripts/screenshots/demo-shot.sh light.png      # light theme
 ```
 
 Needs `tmux`, `chromium`, `imagemagick` and a built `cove` on the PATH. The demo runs with `HOME` pointed at the fake folder, so nothing from your own machine can appear.
+
+The animated demo (`assets/demo.gif`) is recorded the same way: `scripts/screenshots/demo-gif.sh out.gif` (also needs `ffmpeg`).

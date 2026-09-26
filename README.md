@@ -14,7 +14,7 @@ Then run `cove` (or the short form, `cv`).
 
 Cove is a terminal app for everyone who talks to coding agents all day. It finds every chat you have had with Claude Code, Codex, opencode and friends, lets you **group them into workspaces**, **rename them**, and jump straight back into any of them.
 
-![Cove showing chats grouped into workspaces, with a live preview](assets/screenshots/overview.png)
+![Cove in action: search, drag a chat into a workspace, rename it, delete it and restore it](assets/demo.gif)
 
 ```
 cove                 open the app
@@ -35,7 +35,9 @@ cove --list          print your chats instead of opening the app
 
 ## Screenshots
 
-*All screenshots use invented demo chats.*
+*Everything on this page uses invented demo chats.*
+
+![Cove showing chats grouped into workspaces, with a live preview](assets/screenshots/overview.png)
 
 **Drag a chat onto a workspace** (or press `F3`). Names you choose, like "Cart rounding bug", replace the agent's title.
 
