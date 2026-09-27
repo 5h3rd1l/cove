@@ -86,6 +86,13 @@ npm install --global cove-cli
 That is all: npm picks the right native binary for your machine. It installs two commands, `cove` and `cv`.
 
 > **Platforms:** macOS (Apple Silicon and Intel) and Linux (x64 and arm64). Windows is not supported yet ([#6](https://github.com/5h3rd1l/cove/issues/6)).
+>
+> **Getting `EACCES: permission denied` on Linux?** Your system's npm is trying to install into a root-owned folder. Fix it once, for every future global package too:
+> ```bash
+> mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global
+> echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+> npm install --global cove-cli
+> ```
 
 **From source** (needs Rust 1.88 or newer):
 
