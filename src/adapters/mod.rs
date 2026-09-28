@@ -74,6 +74,14 @@ pub trait Adapter: Send {
         scan
     }
     fn resume_command(&self, session: &Session, yolo: bool) -> Vec<String>;
+    /// The command that opens a brand-new, unsaved-by-Cove session with this
+    /// agent (the scratch chat, `Ctrl+I`). `directory` is where the caller
+    /// will run it. The default just starts the bare binary in `directory`,
+    /// which is right for every agent whose CLI opens a fresh session with
+    /// no arguments; override it for one that needs more.
+    fn new_session_command(&self, _directory: &str, _yolo: bool) -> Vec<String> {
+        vec![self.name().to_string()]
+    }
     fn raw_stats(&self) -> RawAdapterStats;
 }
 

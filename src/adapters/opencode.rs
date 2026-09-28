@@ -84,6 +84,10 @@ impl Adapter for OpenCodeAdapter {
         ]
     }
 
+    fn new_session_command(&self, directory: &str, _yolo: bool) -> Vec<String> {
+        vec!["opencode".to_string(), directory.to_string()]
+    }
+
     fn raw_stats(&self) -> RawAdapterStats {
         if self.db_path.exists() {
             let mut total_bytes = self.db_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -938,6 +942,15 @@ mod tests {
     use crate::adapters::Adapter;
 
     use super::*;
+
+    #[test]
+    fn new_session_command_starts_fresh_in_the_given_directory() {
+        let adapter = OpenCodeAdapter::default();
+        assert_eq!(
+            adapter.new_session_command("/work/app", false),
+            ["opencode", "/work/app"]
+        );
+    }
 
     #[test]
     fn parses_legacy_session_and_resume_command() {

@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
+use crate::adapters::{KnownSessions, adapter_for};
 use crate::config::{AGENT_ORDER, is_agent};
 use crate::model::Session;
 use crate::query::{Filter, parse_query};
@@ -102,6 +103,17 @@ pub(super) struct Picker {
     pub(super) selected: usize,
 }
 
+/// A scratch chat (`Ctrl+I`): a brand-new, throwaway session with an agent.
+/// `known_before` is the (agent, id) pairs already indexed at request time,
+/// so whatever new session the agent writes while it runs can be found and
+/// hidden again the moment it exits.
+pub(super) struct ScratchRequest {
+    pub(super) command: Vec<String>,
+    pub(super) directory: String,
+    pub(super) agent: &'static str,
+    known_before: KnownSessions,
+}
+
 /// A chat being dragged with the mouse.
 #[derive(Debug, Clone)]
 pub(super) struct Drag {
@@ -181,6 +193,7 @@ pub(super) struct AppState {
     pub(super) edit: Option<Edit>,
     pub(super) picker: Option<Picker>,
     pub(super) confirm: Option<ConfirmAction>,
+    scratch_requested: Option<ScratchRequest>,
     pub(super) drag: Option<Drag>,
     pub(super) last_click: Option<(std::time::Instant, u16, u16)>,
     search_generation: u64,
@@ -256,6 +269,7 @@ impl AppState {
             edit: None,
             picker: None,
             confirm: None,
+            scratch_requested: None,
             drag: None,
             last_click: None,
             search_generation: 0,
@@ -685,6 +699,72 @@ impl AppState {
         } else {
             self.move_session_to(&id, TRASH);
         }
+    }
+
+    /// `Ctrl+I` / `Alt+I`: ask to open a scratch chat — a brand-new session
+    /// with an agent, for a quick aside that should not linger in the chat
+    /// list. Uses the selected chat's agent so it stays contextual, or the
+    /// first agent with any indexed history, or `claude` as a last resort.
+    /// `tui.rs` services the request: it owns the terminal, so it is the one
+    /// that suspends Cove, runs the agent, and resumes.
+    pub(super) fn request_scratch(&mut self) {
+        let agent = self
+            .selected_session()
+            .map(|session| session.agent.clone())
+            .or_else(|| {
+                self.agent_filters_with_sessions()
+                    .first()
+                    .map(|(agent, _)| (*agent).to_string())
+            })
+            .unwrap_or_else(|| "claude".to_string());
+        let Some(adapter) = adapter_for(&agent) else {
+            self.status = format!("no adapter for agent {agent}");
+            return;
+        };
+        let directory = std::env::current_dir()
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_string))
+            .unwrap_or_default();
+        let known_before = self.engine.known_sessions().unwrap_or_default();
+        self.scratch_requested = Some(ScratchRequest {
+            command: adapter.new_session_command(&directory, self.yolo),
+            directory,
+            agent: adapter.name(),
+            known_before,
+        });
+    }
+
+    pub(super) fn take_scratch_request(&mut self) -> Option<ScratchRequest> {
+        self.scratch_requested.take()
+    }
+
+    /// Called after the scratch chat's process exits: finds whatever new
+    /// session(s) that agent wrote while it ran and hides them the same way
+    /// `F9` does, so they never show up in Cove. It cannot know for certain
+    /// that a new session belongs to this run rather than something else
+    /// happening with the same agent at the same moment, but that is rare
+    /// enough to accept for a quick-aside feature — and nothing on disk is
+    /// ever touched either way, so the worst case is a chat staying hidden
+    /// that a purist would have kept.
+    pub(super) fn finish_scratch(&mut self, request: ScratchRequest) {
+        let _ = self.engine.refresh_incremental();
+        let _ = self.engine.reload();
+        let after = self.engine.known_sessions().unwrap_or_default();
+        let new_ids = new_sessions_for(request.agent, &request.known_before, &after);
+        let hidden = new_ids.len();
+        for id in &new_ids {
+            let _ = self.ws.purge_chat(id);
+        }
+        self.refresh_live();
+        self.status = if hidden == 0 {
+            "scratch chat closed".to_string()
+        } else {
+            format!(
+                "scratch chat closed and hidden ({hidden} new session{})",
+                if hidden == 1 { "" } else { "s" }
+            )
+        };
+        self.request_search_preserving_selection(false);
     }
 
     /// F9: ask before deleting the selected chat for good. Only chats that are
@@ -1232,5 +1312,60 @@ fn elapsed_label(elapsed: Duration) -> String {
         format!("{seconds:.1}s")
     } else {
         format!("{:.0}ms", seconds * 1000.0)
+    }
+}
+
+/// The scratch chat's actual purge decision: which ids of `agent` are in
+/// `known_after` but were not already in `known_before`.
+fn new_sessions_for(
+    agent: &str,
+    known_before: &KnownSessions,
+    known_after: &KnownSessions,
+) -> Vec<String> {
+    known_after
+        .keys()
+        .filter(|(found_agent, id)| {
+            found_agent == agent && !known_before.contains_key(&(found_agent.clone(), id.clone()))
+        })
+        .map(|(_, id)| id.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn known(pairs: &[(&str, &str)]) -> KnownSessions {
+        pairs
+            .iter()
+            .map(|(agent, id)| ((agent.to_string(), id.to_string()), 0.0))
+            .collect()
+    }
+
+    #[test]
+    fn new_sessions_for_only_reports_ids_of_that_agent_absent_before() {
+        let before = known(&[("claude", "a"), ("codex", "x")]);
+        let after = known(&[("claude", "a"), ("claude", "b"), ("codex", "y")]);
+
+        let mut claude_new = new_sessions_for("claude", &before, &after);
+        claude_new.sort();
+        assert_eq!(claude_new, vec!["b".to_string()], "a already existed");
+
+        // codex's new session is ignored when checking claude.
+        assert!(
+            new_sessions_for("claude", &before, &after)
+                .iter()
+                .all(|id| id != "y")
+        );
+        assert_eq!(
+            new_sessions_for("codex", &before, &after),
+            vec!["y".to_string()]
+        );
+    }
+
+    #[test]
+    fn new_sessions_for_finds_nothing_when_nothing_changed() {
+        let snapshot = known(&[("claude", "a")]);
+        assert!(new_sessions_for("claude", &snapshot, &snapshot).is_empty());
     }
 }

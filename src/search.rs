@@ -1,6 +1,7 @@
 use anyhow::Result;
 
-use crate::index::SessionIndex;
+use crate::adapters::KnownSessions;
+use crate::index::{RefreshSummary, SessionIndex};
 use crate::model::Session;
 
 #[derive(Clone)]
@@ -22,6 +23,19 @@ impl SearchEngine {
 
     pub fn reload(&mut self) -> Result<()> {
         self.index.reload()
+    }
+
+    /// Every (agent, id) pair currently in the index, for diffing against
+    /// after a scratch chat closes (the scratch feature, `Ctrl+I`).
+    pub fn known_sessions(&self) -> Result<KnownSessions> {
+        self.index.known_sessions()
+    }
+
+    /// A blocking rescan of every agent's session store. Used after a
+    /// scratch chat closes, so the session it just wrote is findable and can
+    /// be hidden again immediately.
+    pub fn refresh_incremental(&self) -> Result<RefreshSummary> {
+        self.index.refresh_incremental()
     }
 
     pub fn all_sessions(&self) -> Vec<Session> {

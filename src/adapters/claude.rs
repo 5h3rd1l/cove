@@ -287,6 +287,14 @@ impl Adapter for ClaudeAdapter {
         )
     }
 
+    fn new_session_command(&self, _directory: &str, yolo: bool) -> Vec<String> {
+        let mut command = vec!["claude".to_string()];
+        if yolo {
+            command.push("--dangerously-skip-permissions".to_string());
+        }
+        command
+    }
+
     fn raw_stats(&self) -> RawAdapterStats {
         raw_stats_for_tree(self.name(), &self.sessions_dir, "jsonl")
     }
@@ -369,6 +377,16 @@ mod tests {
                     .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn new_session_command_starts_fresh_with_no_id() {
+        let adapter = ClaudeAdapter::default();
+        assert_eq!(adapter.new_session_command("/work/app", false), ["claude"]);
+        assert_eq!(
+            adapter.new_session_command("/work/app", true),
+            ["claude", "--dangerously-skip-permissions"]
+        );
     }
 
     #[test]

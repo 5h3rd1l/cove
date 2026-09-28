@@ -37,6 +37,14 @@ The list on the left has **All chats**, your **workspaces**, **Unsorted** (chats
 - In **Deleted**: `F8` or ↺ restores; `Delete`, `F9` or the red ✕ erases for good after a confirmation.
 - Erasing for good hides the chat from Cove forever. **Cove never modifies your agents' own files.**
 
+## Scratch chats
+
+`Ctrl+I` (or `Alt+I`, see below) opens a brand-new session — not a resume — with an agent, for a quick aside you don't want cluttering the list. Cove leaves its own screen entirely while the agent runs, exactly as it does for `Enter`, and comes back the moment it exits.
+
+It picks the agent from the selected chat, or the agent with the most indexed history if nothing is selected, or Claude Code as a last resort. When the agent CLI exits, Cove rescans and hides (does not delete) whatever new session it just wrote, the same as pressing `F9` on it. The chat's own file is untouched on disk; it just never shows up in Cove.
+
+`Ctrl+I` needs a terminal that reports the Kitty keyboard protocol (kitty, WezTerm, foot, recent Alacritty, ghostty, …) to tell it apart from a bare Tab; Cove enables that automatically when the terminal supports it. `Alt+I` works everywhere, with no such requirement.
+
 ## Everything else
 
 `F1` shows every shortcut. `Ctrl+P` toggles the preview, `Ctrl+O` the workspace list, `Ctrl+Y` copies the resume command, `Esc` goes back and then quits.

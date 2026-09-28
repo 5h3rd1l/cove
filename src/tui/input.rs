@@ -63,6 +63,13 @@ pub(super) fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<Option<T
             }
         }
         (KeyCode::Char('p'), KeyModifiers::CONTROL) => state.show_preview = !state.show_preview,
+        // Ctrl+I is the byte Tab sends on any terminal without the Kitty
+        // keyboard protocol (see tui.rs), where it falls through to the Tab
+        // arm below instead. Alt+I always reaches here, everywhere.
+        (KeyCode::Char('i'), KeyModifiers::CONTROL) => state.request_scratch(),
+        (KeyCode::Char('i'), modifiers) if modifiers.contains(KeyModifiers::ALT) => {
+            state.request_scratch();
+        }
         (KeyCode::Esc, _) => return Ok(Some(TuiExit::Quit)),
         (KeyCode::Enter, _) => {
             if let Some(exit) = begin_action(state, PendingAction::Resume)? {

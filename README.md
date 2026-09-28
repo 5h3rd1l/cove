@@ -32,6 +32,7 @@ cove --list          print your chats instead of opening the app
 - **A safe trash.** Delete a chat or a whole workspace and it lands in **Deleted**, where you can browse it and restore it. Erasing for good is a separate, confirmed step.
 - **Keyboard or mouse.** `←` `→` move between the workspace list and your chats, `/` jumps to search, and typing anywhere searches.
 - **Resume in one key.** `Enter` reopens the chat in its agent, in its folder.
+- **A scratch chat for quick asides.** `Ctrl+I` (or `Alt+I`) opens a brand-new session with an agent for a one-off question, and hides it the moment you close it — no clutter in the list.
 
 ## Screenshots
 
@@ -61,7 +62,7 @@ cove --list          print your chats instead of opening the app
 
 ## Your chats are never touched
 
-Cove only *reads* your agents' history. Workspaces, names and the trash live in one small file, `~/.local/state/cove/state.json`. Deleting something in Cove never deletes a chat from Claude, Codex or opencode, and `claude --resume` keeps working for everything.
+Cove only *reads* your agents' history. Workspaces, names and the trash live in one small file, `~/.local/state/cove/state.json`. Deleting something in Cove never deletes a chat from Claude, Codex or opencode, and `claude --resume` keeps working for everything. A scratch chat (`Ctrl+I`) works the same way: the agent still writes its own session file as it always would, Cove just hides it from the list afterward.
 
 ## Keys
 
@@ -75,6 +76,7 @@ Cove only *reads* your agents' history. Workspaces, names and the trash live in 
 | `F4` | new workspace |
 | `F8` or `Delete` | delete (in **Deleted**: `F8` restores, `Delete` erases for good) |
 | `Ctrl+O` | hide or show the workspace list |
+| `Ctrl+I` or `Alt+I` | scratch chat: a fresh session, hidden as soon as you close it |
 | `F1` | every shortcut |
 
 ## Install

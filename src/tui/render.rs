@@ -1118,7 +1118,7 @@ fn footer_line(status: &str, width: u16, theme: &Theme, deleted_view: bool) -> L
 }
 
 fn draw_help_modal(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let popup = centered_rect(78, 35, area);
+    let popup = centered_rect(78, 37, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1179,6 +1179,14 @@ fn draw_help_modal(frame: &mut Frame, area: Rect, theme: &Theme) {
         ),
         Line::raw(""),
         section("General"),
+        help_row(
+            theme,
+            "  Ctrl+I / Alt+I|Scratch chat: a fresh, throwaway session",
+        ),
+        help_row(
+            theme,
+            "  Ctrl+I looks like Tab on some terminals; Alt+I always works",
+        ),
         help_row(theme, "  Mouse wheel|Scroll under the pointer"),
         help_row(
             theme,

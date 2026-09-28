@@ -295,6 +295,14 @@ impl Adapter for CodexAdapter {
         )
     }
 
+    fn new_session_command(&self, _directory: &str, yolo: bool) -> Vec<String> {
+        let mut command = vec!["codex".to_string()];
+        if yolo {
+            command.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+        }
+        command
+    }
+
     fn raw_stats(&self) -> RawAdapterStats {
         raw_stats_for_tree(self.name(), &self.sessions_dir, "jsonl")
     }
@@ -322,6 +330,16 @@ mod tests {
                 .join("\n"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn new_session_command_starts_fresh_with_no_id() {
+        let adapter = CodexAdapter::default();
+        assert_eq!(adapter.new_session_command("/work/app", false), ["codex"]);
+        assert_eq!(
+            adapter.new_session_command("/work/app", true),
+            ["codex", "--dangerously-bypass-approvals-and-sandbox"]
+        );
     }
 
     #[test]

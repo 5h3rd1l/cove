@@ -1,13 +1,16 @@
 use std::io::{self, Stdout};
 use std::panic;
+use std::process::Command;
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEvent, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
+    MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -36,7 +39,7 @@ use images::AgentImages;
 use input::handle_key;
 use layout::ScrollTarget;
 use render::draw;
-use state::{AppState, ScanMessage, SearchRequest, handle_scan_message};
+use state::{AppState, ScanMessage, ScratchRequest, SearchRequest, handle_scan_message};
 
 pub use images::ImageProtocol;
 pub use theme::ThemeMode;
@@ -166,6 +169,10 @@ fn run_loop(
                         return Ok(exit);
                     }
                     start_search_if_requested(state, &search_tx);
+                    if let Some(request) = state.take_scratch_request() {
+                        run_scratch(terminal, state, request)?;
+                        overlay_was_open = state.overlay_open();
+                    }
                     needs_draw = true;
                 }
                 Event::Resize(_, _) => {
@@ -184,6 +191,73 @@ fn run_loop(
             }
         }
     }
+}
+
+/// Runs a scratch chat (`Ctrl+I`): leaves Cove's screen entirely, runs the
+/// agent with the terminal it would normally get, waits for it to exit, then
+/// comes back to Cove exactly where the user left it.
+fn run_scratch(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    state: &mut AppState,
+    request: ScratchRequest,
+) -> Result<()> {
+    suspend_terminal()?;
+
+    let mut command = Command::new(&request.command[0]);
+    command.args(&request.command[1..]);
+    if !request.directory.is_empty() {
+        command.current_dir(&request.directory);
+    }
+    let outcome = command.status();
+
+    resume_terminal(terminal)?;
+
+    match outcome {
+        Ok(_status) => state.finish_scratch(request),
+        Err(error) => {
+            state.status = format!("could not start {}: {error}", request.command[0]);
+        }
+    }
+    Ok(())
+}
+
+/// Leaves Cove's screen so a child process can use the terminal normally,
+/// the same modes `restore_terminal` releases on exit.
+fn suspend_terminal() -> Result<()> {
+    disable_raw_mode()?;
+    let mut stdout = io::stdout();
+    if KEYBOARD_ENHANCEMENT.load(Ordering::Relaxed) {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
+    execute!(
+        stdout,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
+    Ok(())
+}
+
+/// The other half of `suspend_terminal`: back to the modes `setup_terminal`
+/// establishes, plus a full repaint, since whatever ran in between could
+/// have left anything on screen.
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        SetTitle(crate::config::APP_NAME)
+    )?;
+    if KEYBOARD_ENHANCEMENT.load(Ordering::Relaxed) {
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+    execute!(stdout, EnableMouseCapture)?;
+    terminal.clear()?;
+    Ok(())
 }
 
 struct SearchResult {
@@ -286,6 +360,13 @@ fn handle_mouse(state: &mut AppState, mouse: MouseEvent, area: Rect) -> bool {
     }
 }
 
+/// Whether the terminal accepted the Kitty keyboard protocol at startup.
+/// Set once in `setup_terminal`; read wherever the terminal is left or
+/// re-entered, since it decides whether to push or pop the enhancement
+/// flags there too. Without it, `Ctrl+I` is indistinguishable from a bare
+/// Tab on most terminals (see `input.rs`).
+static KEYBOARD_ENHANCEMENT: AtomicBool = AtomicBool::new(false);
+
 /// Restore the terminal before the default panic handler runs. Without this,
 /// the panic message prints into the alternate screen and is erased, and the
 /// shell is left in raw mode.
@@ -302,6 +383,9 @@ fn install_panic_hook() {
 
 fn restore_terminal_modes() {
     let mut stdout = io::stdout();
+    if KEYBOARD_ENHANCEMENT.load(Ordering::Relaxed) {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(
         stdout,
         DisableMouseCapture,
@@ -322,6 +406,18 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
         SetTitle(crate::config::APP_NAME)
     )?;
     guard.alternate_screen = true;
+    // Best-effort: most terminals lack this, and Ctrl+I just behaves like
+    // Tab there instead (see input.rs). `supports_keyboard_enhancement`
+    // queries the terminal and can fail on an unusual one; treat that the
+    // same as "unsupported" rather than failing startup over it.
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+        KEYBOARD_ENHANCEMENT.store(true, Ordering::Relaxed);
+        guard.keyboard_enhancement = true;
+    }
     execute!(stdout, EnableMouseCapture)?;
     guard.mouse_capture = true;
     let backend = CrosstermBackend::new(stdout);
@@ -334,6 +430,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 struct TerminalSetupGuard {
     raw_mode: bool,
     alternate_screen: bool,
+    keyboard_enhancement: bool,
     mouse_capture: bool,
 }
 
@@ -341,6 +438,7 @@ impl TerminalSetupGuard {
     fn disarm(&mut self) {
         self.raw_mode = false;
         self.alternate_screen = false;
+        self.keyboard_enhancement = false;
         self.mouse_capture = false;
     }
 }
@@ -350,6 +448,9 @@ impl Drop for TerminalSetupGuard {
         let mut stdout = io::stdout();
         if self.mouse_capture {
             let _ = execute!(stdout, DisableMouseCapture);
+        }
+        if self.keyboard_enhancement {
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
         }
         if self.alternate_screen {
             let _ = execute!(stdout, LeaveAlternateScreen);
@@ -362,6 +463,9 @@ impl Drop for TerminalSetupGuard {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
+    if KEYBOARD_ENHANCEMENT.load(Ordering::Relaxed) {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
     execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
@@ -1430,6 +1534,59 @@ mod tests {
         state.set_scope(super::workspaces::ALL);
         state.refresh_search();
         assert_eq!(state.visible.len(), 3);
+    }
+
+    #[test]
+    fn scratch_uses_the_selected_chats_agent() {
+        let mut state = test_state(vec![
+            session_for_agent("a", "claude", "/work/app"),
+            session_for_agent("b", "codex", "/work/app"),
+        ]);
+        let codex_row = state
+            .visible
+            .iter()
+            .position(|session| session.agent == "codex")
+            .unwrap();
+        state.selected = codex_row;
+
+        state.request_scratch();
+
+        let request = state
+            .take_scratch_request()
+            .expect("a scratch was requested");
+        assert_eq!(request.agent, "codex");
+        assert_eq!(request.command, vec!["codex".to_string()]);
+        assert!(!request.directory.is_empty());
+        assert!(state.take_scratch_request().is_none(), "one-shot request");
+    }
+
+    #[test]
+    fn scratch_falls_back_to_an_indexed_agent_when_nothing_is_selected() {
+        let mut state = test_state(vec![session_for_agent("a", "codex", "/work/app")]);
+        // A query that matches nothing: no selection, but codex is indexed.
+        state.query = "no such chat anywhere".to_string();
+        state.refresh_search();
+        assert!(state.selected_session().is_none());
+
+        state.request_scratch();
+
+        let request = state
+            .take_scratch_request()
+            .expect("a scratch was requested");
+        assert_eq!(request.agent, "codex");
+    }
+
+    #[test]
+    fn scratch_falls_back_to_claude_when_nothing_is_indexed() {
+        let mut state = test_state(Vec::new());
+
+        state.request_scratch();
+
+        let request = state
+            .take_scratch_request()
+            .expect("a scratch was requested");
+        assert_eq!(request.agent, "claude");
+        assert_eq!(request.command, vec!["claude".to_string()]);
     }
 
     #[test]

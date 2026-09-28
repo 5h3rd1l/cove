@@ -137,6 +137,10 @@ Each adapter returns the command needed to continue its session:
 
 `exec()` replaces cove with the agent process, and the agent receives the session's working directory.
 
+### Scratch chats
+
+`Ctrl+I` / `Alt+I` uses a different handoff: `Adapter::new_session_command(directory, yolo)` (default: the bare binary name; overridden where a fresh session needs more, e.g. `opencode <directory>`) with no session id, no `--resume`/`resume`. Cove suspends its own terminal (leaves the alternate screen, disables raw mode and mouse capture, pops the keyboard enhancement flags if it pushed them), runs the command with `Command::status()` (inherited stdio, blocking), then reverses all of that and does a full repaint. Unlike a normal resume, cove does not exit: `AppState::request_scratch` snapshots `SessionIndex::known_sessions()` for the chosen agent beforehand, and `AppState::finish_scratch` diffs against the same call made after the agent exits (via a synchronous `refresh_incremental`) to find what it just wrote, then hides those ids the same way `F9` does. See `src/tui/state.rs` and `run_scratch` in `src/tui.rs`.
+
 ## Performance
 
 cove avoids a full parse on ordinary launches:
